@@ -87,7 +87,7 @@ function renderSetup() {
         ${setupRows.length < RULES.players.max ? '<button data-act="add">+ Add player</button>' : ''}
         <label>Round limit <input type="number" min="0" max="999" value="${roundLimit}" data-limit /></label>
       </div>
-      <p class="muted small">Round limit 0 = play until one player is left (bot games average about 200 rounds). At the limit, highest net worth wins.</p>
+      <p class="muted small">Round limit 0 = play until one player is left (4-bot games run about 230 rounds). At the limit, highest net worth wins.</p>
       <button class="primary wide" data-act="start">Start game</button>
       <details class="rules">
         <summary>Rules in short</summary>

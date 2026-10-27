@@ -53,4 +53,4 @@ These were open in the design doc. Each is a default, not a final call.
 - Hotels need all 8 cities of the section; houses need none.
 - Doubles do not grant extra rolls. No auctions or mortgages. Debt auto-sells buildings, then properties at 50%.
 - Destroy disasters and "swap places" pick automatically instead of asking the player.
-- Round limit (default 60) ends the game by net worth, because unlimited games run about 200 rounds in bot simulations.
+- Round limit (default 60) ends the game by net worth, because unlimited 4-bot games run a median of about 230 rounds.

@@ -1,7 +1,7 @@
 {
   "_note": "Every number here is an unverified placeholder. Change values here, not in code. Shared by the web build and the future Roblox port.",
   "startingCash": 1500,
-  "roundLimit": { "default": 60, "_note": "Rounds before the richest player (net worth) wins. 0 = play until one player is left. Bot simulations run about 200 rounds without a limit." },
+  "roundLimit": { "default": 60, "_note": "Rounds before the richest player (net worth) wins. 0 = play until one player is left. 4-bot simulations run a median of about 230 rounds without a limit." },
   "dice": { "count": 2, "sides": 6 },
   "players": { "min": 2, "max": 6 },
   "tiers": [
