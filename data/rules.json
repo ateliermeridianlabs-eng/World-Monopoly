@@ -1,0 +1,74 @@
+{
+  "_note": "Every number here is an unverified placeholder. Change values here, not in code. Shared by the web build and the future Roblox port.",
+  "startingCash": 1500,
+  "roundLimit": { "default": 60, "_note": "Rounds before the richest player (net worth) wins. 0 = play until one player is left. Bot simulations run about 200 rounds without a limit." },
+  "dice": { "count": 2, "sides": 6 },
+  "players": { "min": 2, "max": 6 },
+  "tiers": [
+    { "id": "low", "level": 1, "maxPrice": 150, "houseCost": 50 },
+    { "id": "mid", "level": 2, "maxPrice": 320, "houseCost": 100 },
+    { "id": "high", "level": 3, "maxPrice": 100000, "houseCost": 200 }
+  ],
+  "rent": {
+    "baseRentPercentOfPrice": 8,
+    "minimumBaseRent": 2,
+    "levelMultipliers": [1, 4, 12, 28, 34, 40],
+    "_levelMultipliersNote": "Index = building level: 0 empty lot, 1-4 houses, 5 hotel.",
+    "sectionBonusPerExtraSquare": 0.1,
+    "sectionBonusCap": 1.1,
+    "sectionBonusCounts": "citiesAndUtilities",
+    "_sectionBonusCountsNote": "citiesAndUtilities = 12 squares, so 11 extra squares hit the +110% cap. Set to cities to count the 8 cities only (cap then tops out at +70%)."
+  },
+  "building": {
+    "maxHousesBeforeHotel": 4,
+    "hotelRequiresFullSection": true,
+    "sellRefundPercent": 50
+  },
+  "salary": {
+    "checkpointEvery": 12,
+    "perCheckpoint": 50,
+    "incomeTaxBrackets": [
+      { "netWorthBelow": 1000, "rate": 0.10 },
+      { "netWorthBelow": 3000, "rate": 0.18 },
+      { "netWorthBelow": null, "rate": 0.25 }
+    ]
+  },
+  "costOfLiving": {
+    "perTierLevel": 2,
+    "minimum": 5,
+    "gracePeriodLaps": 2,
+    "gracePeriodMultiplier": 0.5
+  },
+  "propertyTax": { "percentOfPropertyValue": 1 },
+  "taxSquare": { "amount": 100 },
+  "utilities": {
+    "kinds": [
+      { "id": "water", "name": "Water", "icon": "💧" },
+      { "id": "gas", "name": "Gas", "icon": "🔥" },
+      { "id": "electricity", "name": "Electricity", "icon": "⚡" },
+      { "id": "wifi", "name": "WiFi", "icon": "📶" }
+    ],
+    "price": 100,
+    "feePerHouse": 10,
+    "feePerHotel": 30,
+    "allFourMetersMultiplier": 1.5,
+    "controlBonusMultiplier": 1.5,
+    "controlBonusMajorityOfCities": 5,
+    "maxMultiplier": 2,
+    "requiresCityInSection": true,
+    "_requiresCityInSectionNote": "If true, a meter only earns fees while its owner owns at least one city in that section. Otherwise the fee goes to the bank."
+  },
+  "airports": {
+    "price": 200,
+    "landingFee": 25,
+    "flightFare": 50,
+    "bonusPerExtraAirport": 0.1
+  },
+  "disasters": {
+    "destroyChance": 0.3,
+    "_note": "Degrade: every developed property in the section loses 1 level. Destroy: each owner in the section loses all buildings on their most developed property there. No refunds."
+  },
+  "bankruptcy": {
+    "propertySaleRefundPercent": 50
+  }
+}

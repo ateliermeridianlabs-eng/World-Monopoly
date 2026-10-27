@@ -1,0 +1,131 @@
+{
+  "_note": "All prices are unverified gameplay placeholders from the design doc. Section order here is the order around the board (cheapest average first). Cities are listed cheapest first, which is the order they appear on the board. image null = no art yet, UI draws a placeholder.",
+  "sections": [
+    {
+      "id": "africa", "name": "Africa", "color": "#c9822b",
+      "disasters": ["Drought", "Sandstorm"],
+      "cities": [
+        { "id": "addis-ababa", "name": "Addis Ababa", "price": 60, "landmark": "Entoto hills, cross-topped church", "image": null },
+        { "id": "accra", "name": "Accra", "price": 70, "landmark": "Independence Arch", "image": null },
+        { "id": "lagos", "name": "Lagos", "price": 90, "landmark": "Bridge over lagoon skyline", "image": null },
+        { "id": "nairobi", "name": "Nairobi", "price": 100, "landmark": "Acacia with skyline", "image": null },
+        { "id": "casablanca", "name": "Casablanca", "price": 110, "landmark": "Hassan II Mosque minaret", "image": null },
+        { "id": "cairo", "name": "Cairo", "price": 120, "landmark": "Pyramid and Sphinx", "image": null },
+        { "id": "johannesburg", "name": "Johannesburg", "price": 140, "landmark": "Mine headgear", "image": null },
+        { "id": "cape-town", "name": "Cape Town", "price": 180, "landmark": "Table Mountain", "image": null }
+      ]
+    },
+    {
+      "id": "russia", "name": "Russia", "color": "#8e3b46",
+      "disasters": ["Wildfire", "River Flood"],
+      "cities": [
+        { "id": "novosibirsk", "name": "Novosibirsk", "price": 80, "landmark": "Opera house dome", "image": null },
+        { "id": "nizhny-novgorod", "name": "Nizhny Novgorod", "price": 80, "landmark": "Kremlin wall on riverbank", "image": null },
+        { "id": "yekaterinburg", "name": "Yekaterinburg", "price": 90, "landmark": "Ural mountains", "image": null },
+        { "id": "vladivostok", "name": "Vladivostok", "price": 90, "landmark": "Russky Bridge", "image": null },
+        { "id": "kazan", "name": "Kazan", "price": 100, "landmark": "Kremlin minaret and tower", "image": null },
+        { "id": "sochi", "name": "Sochi", "price": 130, "landmark": "Palms and mountains", "image": null },
+        { "id": "saint-petersburg", "name": "Saint Petersburg", "price": 150, "landmark": "Church of the Savior on Spilled Blood", "image": null },
+        { "id": "moscow", "name": "Moscow", "price": 220, "landmark": "Saint Basil's", "image": null }
+      ]
+    },
+    {
+      "id": "south-america", "name": "South America", "color": "#2f9e5b",
+      "disasters": ["Earthquake", "Hurricane"],
+      "cities": [
+        { "id": "caracas", "name": "Caracas", "price": 70, "landmark": "Avila mountain with cable car", "image": "cities/caracas.webp" },
+        { "id": "medellin", "name": "Medellin", "price": 90, "landmark": "Colorful hillside houses", "image": "cities/medellin.webp" },
+        { "id": "lima", "name": "Lima", "price": 100, "landmark": "Colonial cathedral", "image": "cities/lima.webp" },
+        { "id": "bogota", "name": "Bogota", "price": 110, "landmark": "Andes with cable car", "image": "cities/bogota.webp" },
+        { "id": "santiago", "name": "Santiago", "price": 120, "landmark": "Andes behind skyline", "image": "cities/santiago.webp" },
+        { "id": "buenos-aires", "name": "Buenos Aires", "price": 140, "landmark": "Obelisco", "image": "cities/buenos-aires.webp" },
+        { "id": "rio-de-janeiro", "name": "Rio de Janeiro", "price": 150, "landmark": "Christ the Redeemer", "image": "cities/rio-de-janeiro.webp" },
+        { "id": "sao-paulo", "name": "Sao Paulo", "price": 200, "landmark": "Skyscraper skyline", "image": "cities/sao-paulo.webp" }
+      ]
+    },
+    {
+      "id": "japan", "name": "Japan", "color": "#d6455d",
+      "disasters": ["Earthquake", "Typhoon"],
+      "cities": [
+        { "id": "sapporo", "name": "Sapporo", "price": 90, "landmark": "TV Tower in snow", "image": null },
+        { "id": "fukuoka", "name": "Fukuoka", "price": 110, "landmark": "Fukuoka Tower", "image": null },
+        { "id": "kobe", "name": "Kobe", "price": 120, "landmark": "Red Port Tower", "image": null },
+        { "id": "nagoya", "name": "Nagoya", "price": 130, "landmark": "Castle golden shachihoko", "image": null },
+        { "id": "kyoto", "name": "Kyoto", "price": 140, "landmark": "Red torii gate", "image": null },
+        { "id": "yokohama", "name": "Yokohama", "price": 150, "landmark": "Cosmo Clock 21 ferris wheel", "image": null },
+        { "id": "osaka", "name": "Osaka", "price": 160, "landmark": "Osaka Castle", "image": null },
+        { "id": "tokyo", "name": "Tokyo", "price": 220, "landmark": "Tokyo Tower", "image": null }
+      ]
+    },
+    {
+      "id": "australia", "name": "Australia", "color": "#e0a526",
+      "disasters": ["Wildfire", "Tornado"],
+      "cities": [
+        { "id": "newcastle", "name": "Newcastle", "price": 90, "landmark": "Lighthouse on cliff", "image": null },
+        { "id": "adelaide", "name": "Adelaide", "price": 110, "landmark": "Adelaide Oval floodlights", "image": null },
+        { "id": "gold-coast", "name": "Gold Coast", "price": 120, "landmark": "Surfer and beach high-rises", "image": null },
+        { "id": "canberra", "name": "Canberra", "price": 130, "landmark": "Parliament House flag mast", "image": null },
+        { "id": "perth", "name": "Perth", "price": 140, "landmark": "Swan Bells", "image": null },
+        { "id": "brisbane", "name": "Brisbane", "price": 150, "landmark": "Story Bridge", "image": null },
+        { "id": "melbourne", "name": "Melbourne", "price": 180, "landmark": "Flinders Street Station", "image": null },
+        { "id": "sydney", "name": "Sydney", "price": 220, "landmark": "Opera House", "image": null }
+      ]
+    },
+    {
+      "id": "uk", "name": "UK", "color": "#3b5bdb",
+      "disasters": ["Heatwave", "River Flood"],
+      "cities": [
+        { "id": "liverpool", "name": "Liverpool", "price": 120, "landmark": "Royal Liver Building", "image": null },
+        { "id": "leeds", "name": "Leeds", "price": 140, "landmark": "Victorian arcade roof", "image": null },
+        { "id": "glasgow", "name": "Glasgow", "price": 200, "landmark": "Clydeside crane", "image": null },
+        { "id": "birmingham", "name": "Birmingham", "price": 220, "landmark": "Canal narrowboat", "image": null },
+        { "id": "bristol", "name": "Bristol", "price": 240, "landmark": "Clifton Suspension Bridge", "image": null },
+        { "id": "manchester", "name": "Manchester", "price": 260, "landmark": "Brick mill chimney", "image": null },
+        { "id": "edinburgh", "name": "Edinburgh", "price": 300, "landmark": "Castle on hill", "image": null },
+        { "id": "london", "name": "London", "price": 580, "landmark": "Big Ben", "image": null }
+      ]
+    },
+    {
+      "id": "germany", "name": "Germany", "color": "#495057",
+      "disasters": ["Heatwave", "River Flood"],
+      "cities": [
+        { "id": "leipzig", "name": "Leipzig", "price": 110, "landmark": "Volkerschlachtdenkmal", "image": null },
+        { "id": "cologne", "name": "Cologne", "price": 150, "landmark": "Cathedral twin spires", "image": null },
+        { "id": "dusseldorf", "name": "Dusseldorf", "price": 220, "landmark": "Rhine tower", "image": null },
+        { "id": "hamburg", "name": "Hamburg", "price": 240, "landmark": "Elbphilharmonie", "image": null },
+        { "id": "stuttgart", "name": "Stuttgart", "price": 260, "landmark": "Mercedes star", "image": null },
+        { "id": "berlin", "name": "Berlin", "price": 300, "landmark": "Brandenburg Gate", "image": null },
+        { "id": "frankfurt", "name": "Frankfurt", "price": 320, "landmark": "Skyline with Euro tower", "image": null },
+        { "id": "munich", "name": "Munich", "price": 540, "landmark": "Neuschwanstein spire", "image": null }
+      ]
+    },
+    {
+      "id": "usa", "name": "USA", "color": "#1c7ed6",
+      "disasters": ["Wildfire", "Tornado"],
+      "cities": [
+        { "id": "houston", "name": "Houston", "price": 140, "landmark": "Space shuttle", "image": "cities/houston.webp" },
+        { "id": "seattle", "name": "Seattle", "price": 280, "landmark": "Space Needle", "image": "cities/seattle.webp" },
+        { "id": "chicago", "name": "Chicago", "price": 300, "landmark": "Cloud Gate", "image": "cities/chicago.webp" },
+        { "id": "miami", "name": "Miami", "price": 440, "landmark": "Art Deco building and palm", "image": "cities/miami.webp" },
+        { "id": "washington-dc", "name": "Washington DC", "price": 480, "landmark": "Capitol dome", "image": "cities/washington-dc.webp" },
+        { "id": "los-angeles", "name": "Los Angeles", "price": 520, "landmark": "Hollywood sign", "image": "cities/los-angeles.webp" },
+        { "id": "san-francisco", "name": "San Francisco", "price": 560, "landmark": "Golden Gate Bridge", "image": "cities/san-francisco.webp" },
+        { "id": "new-york", "name": "New York", "price": 600, "landmark": "Statue of Liberty", "image": "cities/new-york.webp" }
+      ]
+    },
+    {
+      "id": "china", "name": "China", "color": "#c92a2a",
+      "disasters": ["Earthquake", "Tsunami"],
+      "cities": [
+        { "id": "chongqing", "name": "Chongqing", "price": 150, "landmark": "Hillside city with river cable car", "image": null },
+        { "id": "chengdu", "name": "Chengdu", "price": 260, "landmark": "Giant panda", "image": null },
+        { "id": "hangzhou", "name": "Hangzhou", "price": 300, "landmark": "West Lake pagoda", "image": null },
+        { "id": "guangzhou", "name": "Guangzhou", "price": 460, "landmark": "Canton Tower", "image": null },
+        { "id": "shenzhen", "name": "Shenzhen", "price": 540, "landmark": "Glass skyscraper cluster", "image": null },
+        { "id": "beijing", "name": "Beijing", "price": 560, "landmark": "Temple of Heaven", "image": null },
+        { "id": "shanghai", "name": "Shanghai", "price": 580, "landmark": "Oriental Pearl Tower", "image": null },
+        { "id": "hong-kong", "name": "Hong Kong", "price": 600, "landmark": "Victoria Harbour skyline", "image": null }
+      ]
+    }
+  ]
+}
