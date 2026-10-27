@@ -1,0 +1,11 @@
+{
+  "_note": "Starting roles, draft-picked with no duplicates. Effects are read by id in the engine.",
+  "roles": [
+    { "id": "entrepreneur", "name": "Entrepreneur", "summary": "+$500 starting cash. No salary checkpoints.", "startingCashDelta": 500, "noSalary": true },
+    { "id": "banker", "name": "Banker", "summary": "5% interest per lap on cash above $1,000. Pays double property tax.", "interestRate": 0.05, "interestAbove": 1000, "propertyTaxMultiplier": 2 },
+    { "id": "diplomat", "name": "Diplomat", "summary": "Airport fees halved. Section rent bonus capped at +50%.", "airportFeeMultiplier": 0.5, "sectionBonusCap": 0.5 },
+    { "id": "industrialist", "name": "Industrialist", "summary": "Build costs 20% cheaper. Pays 1.5x utility build fees to meters they do not own.", "buildCostMultiplier": 0.8, "utilityFeeMultiplier": 1.5 },
+    { "id": "civil-servant", "name": "Civil Servant", "summary": "Salary taxed at a flat 10%. Starts with $300 less.", "startingCashDelta": -300, "flatIncomeTax": 0.1 },
+    { "id": "landlord", "name": "Landlord", "summary": "Always gets the Utility Control Bonus (1.5x). Cost of living doubled.", "alwaysControlBonus": true, "costOfLivingMultiplier": 2 }
+  ]
+}
