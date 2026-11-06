@@ -2,6 +2,39 @@
 
 A 2D economy-heavy Monopoly variant played on real world cities. Web version first (TypeScript + Vite), Roblox port later.
 
+## Goal
+
+Build a playable, realistic Monopoly variant called World Cities Monopoly. The board uses 72 real cities in 9 sections (USA, South America, UK, Germany, China, Russia, Japan, Africa, Australia). Prices are loosely based on real land value, and the game adds real-life economics: salary checkpoints, taxes every turn, utility meters, airports, and regional disasters.
+
+Platform plan: a browser version first (this repo), then a Roblox (Luau) port. All content lives in JSON under `data/` so both versions share it.
+
+## Status
+
+Done:
+
+- [x] Game design: board layout, rules, roles, event cards, disasters (see "Design decisions" below for the open calls).
+- [x] Rules engine in TypeScript with no DOM code (`src/engine/`), seeded RNG, serializable state, and unit tests.
+- [x] Browser UI: hot-seat play for 2 to 6 players, bots, trading between players, and autosave.
+- [x] Bot simulation script that reports game length and win rates.
+- [x] CI (tests and build) and a GitHub Pages deploy workflow.
+- [x] City art for USA and South America (16 of 72 cities).
+
+## To do
+
+In rough priority order.
+
+1. **Merge the web version into `main`.** Until then, `main` only holds the art.
+2. **Turn on GitHub Pages** (Settings > Pages > Source = GitHub Actions) so the game has a public link.
+3. **Confirm or change the design defaults** listed under "Design decisions" below. They are placeholders, not final calls. (`data/rules.json`, `data/cards.json`)
+4. **Balance the economy.** Every dollar figure is an unverified placeholder. Early bot simulations: games run a median of about 230 rounds without a round limit, players end with about $170 in cash, Entrepreneur wins about 1% of games and Landlord about 15%. Change numbers in `data/rules.json` and `data/roles.json`, then re-run `npm run simulate`.
+5. **Make city art for the remaining 56 cities:** UK, Germany, China, Russia, Japan, Africa, Australia. Landmarks per city are already in `data/sections.json`. See "Art" below for how to add a tile.
+6. **Art for utilities and special squares** (Water, Gas, Electricity, WiFi, New Year, Airport, Highway, Tax, World Event, Disaster). These use emoji icons for now.
+7. **Unify the tile style.** USA tiles are 512x512 with rounded card frames; South America tiles are about 210x220 and edge to edge. Pick one style and size.
+8. **Check the real-world data.** City rankings and prices come from general knowledge and have not been checked against a source.
+9. **Roblox port:** rewrite `src/engine/` in Luau and load the same `data/*.json`.
+
+Not planned yet: online multiplayer, sound, auctions, mortgages.
+
 ## Play locally
 
 ```bash
