@@ -1,0 +1,22 @@
+{
+  "_note": "World Event deck. effect.type is read by the engine. Visa denied no longer sends to jail (jail was removed); it now sends you back to the nearest airport behind you.",
+  "worldEvents": [
+    { "id": "startup-exit", "name": "Startup exit", "kind": "good", "text": "Your startup sold. Collect $150.", "effect": { "type": "gain", "amount": 150 } },
+    { "id": "inheritance", "name": "Inheritance", "kind": "good", "text": "A distant relative left you $200.", "effect": { "type": "gain", "amount": 200 } },
+    { "id": "tax-refund", "name": "Tax refund", "kind": "good", "text": "Collect a $50 tax refund.", "effect": { "type": "gain", "amount": 50 } },
+    { "id": "lottery", "name": "Local lottery", "kind": "good", "text": "You won the local lottery. Collect $100.", "effect": { "type": "gain", "amount": 100 } },
+    { "id": "value-surge", "name": "Property value surge", "kind": "good", "text": "Collect $10 for every property you own.", "effect": { "type": "gainPerProperty", "amount": 10 } },
+    { "id": "remote-work", "name": "Remote work bonus", "kind": "good", "text": "Collect $75 and move forward 2.", "effect": { "type": "gainAndMove", "amount": 75, "steps": 2 } },
+    { "id": "car-crash", "name": "Car crash", "kind": "bad", "text": "Pay $100 medical bills and miss your next turn.", "effect": { "type": "payAndSkip", "amount": 100 } },
+    { "id": "flight-delayed", "name": "Flight delayed", "kind": "bad", "text": "Your next airport fee collection is skipped.", "effect": { "type": "skipAirportIncome" } },
+    { "id": "devaluation", "name": "Currency devaluation", "kind": "bad", "text": "Pay 10% of your cash.", "effect": { "type": "payPercentCash", "percent": 10 } },
+    { "id": "burglary", "name": "Burglary", "kind": "bad", "text": "Pay $75.", "effect": { "type": "pay", "amount": 75 } },
+    { "id": "tax-audit", "name": "Tax audit", "kind": "bad", "text": "Pay $150.", "effect": { "type": "pay", "amount": 150 } },
+    { "id": "natural-disaster", "name": "Natural disaster", "kind": "bad", "text": "Pay $50 for each city you own in this section.", "effect": { "type": "payPerCityInSection", "amount": 50 } },
+    { "id": "visa-denied", "name": "Visa denied", "kind": "bad", "text": "Go back to the nearest airport behind you.", "effect": { "type": "backToAirport" } },
+    { "id": "nearest-airport", "name": "Rerouted", "kind": "neutral", "text": "Advance to the nearest airport. If owned, pay double the landing fee.", "effect": { "type": "nearestAirport", "feeMultiplier": 2 } },
+    { "id": "advance-new-year", "name": "Advance to New Year", "kind": "neutral", "text": "Advance to New Year and collect salary on the way.", "effect": { "type": "advanceTo", "square": 0 } },
+    { "id": "go-back-3", "name": "Wrong turn", "kind": "neutral", "text": "Go back 3 spaces.", "effect": { "type": "move", "steps": -3 } },
+    { "id": "swap-places", "name": "House swap", "kind": "neutral", "text": "Swap places with a random other player.", "effect": { "type": "swapPlaces" } }
+  ]
+}
