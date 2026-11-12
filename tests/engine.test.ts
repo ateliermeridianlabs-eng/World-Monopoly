@@ -3,6 +3,7 @@ import { BOARD, RULES, SECTIONS } from '../src/engine/data';
 import { botStep } from '../src/engine/bot';
 import {
   build, buy, canBuild, cityRent, createGame, endTurn, executeTrade, fly, roll, sectionCities, sectionUtilities, utilityFees,
+  validateTrade,
 } from '../src/engine/game';
 import type { GameState } from '../src/engine/types';
 
@@ -120,6 +121,17 @@ describe('turn flow', () => {
     expect(s.owners[a]).toBe(1);
     expect(s.owners[b]).toBe(0);
     expect(s.players[1].cash).toBe(1500 + 100);
+  });
+
+  it('rejects trade cash that is not a whole number', () => {
+    const s = twoPlayers();
+    const [a] = sectionCities('uk');
+    give(s, 0, [a]);
+    for (const cash of [Number.NaN, 0.5, Infinity, -Infinity]) {
+      expect(validateTrade(s, { from: 0, to: 1, give: [a], get: [], cash })).toMatch(/whole number/);
+      expect(() => executeTrade(s, { from: 0, to: 1, give: [a], get: [], cash })).toThrow();
+    }
+    expect(validateTrade(s, { from: 0, to: 1, give: [a], get: [], cash: 0 })).toBeNull();
   });
 });
 

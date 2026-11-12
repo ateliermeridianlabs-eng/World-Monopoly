@@ -18,7 +18,7 @@ Done:
 - [x] Bot simulation script that reports game length and win rates.
 - [x] CI (tests and build) and a GitHub Pages deploy workflow.
 - [x] City art for USA and South America (16 of 72 cities).
-- [x] Network layer for online multiplayer (`src/net/`). No UI for it yet.
+- [x] Network layer for online multiplayer (`src/net/`) and its browser UI (lobby, invite link, trade prompts, host-lost and take-over). Not yet tested over the real internet.
 
 ## To do
 
@@ -33,7 +33,7 @@ In rough priority order.
 7. **Unify the tile style.** USA tiles are 512x512 with rounded card frames; South America tiles are about 210x220 and edge to edge. Pick one style and size.
 8. **Check the real-world data.** City rankings and prices come from general knowledge and have not been checked against a source.
 9. **Roblox port:** rewrite `src/engine/` in Luau and load the same `data/*.json`.
-10. **Online multiplayer UI** on top of `src/net/` (lobby, invite link, trade prompts, host-lost and take-over), then test over the real internet.
+10. **Test online multiplayer over the real internet** (two devices, different networks). The UI is built and has only been run with a local in-browser transport.
 
 Not planned yet: sound, auctions, mortgages.
 
@@ -46,9 +46,25 @@ npm run dev        # http://localhost:5173
 
 `npm run build` writes a static site to `dist/` that runs from any folder or host.
 
-Hot-seat play for 2 to 6 players on one device; any seat can be a bot. The game autosaves in the browser.
+Two ways to play: hot-seat for 2 to 6 players on one device (any seat can be a bot, and the game autosaves in the browser), or online with each player on their own device (see "Online multiplayer").
 
 ## Online multiplayer
+
+### How to play online
+
+1. On the start screen, enter your name and press "Host online game". You get a lobby with a 6-character room code.
+2. Press "Copy invite link" and send it to the others (or give them the code; they paste it under "Join with code").
+3. Each guest opens the link, enters a name, and sits in an open seat. Everyone can pick a role that nobody else has. The host can add seats, turn a seat into a bot, rename bots, and set the round limit.
+4. When no seat is open, the host presses "Start game". Only the player whose turn it is gets the controls; everyone else sees whose turn it is. A trade offer pops up for the player it is addressed to, even on someone else's turn.
+5. Late arrivals can use the room code shown in the side panel; without a seat they watch.
+
+If someone drops: reloading the page puts a player back in their seat. If a player stays away, the host can press "Hand to bot" next to their name; the player gets the seat back when they return. If the host drops, everyone sees "Host disconnected" and the board stays up. The host gets the game back by reloading the page (the main menu offers "Resume hosted game"), or any player can press "Take over as host" to continue from the last state their device received.
+
+To try it alone, open the link in a private window (or another browser). Two tabs in the same browser count as one player.
+
+For development, `npm run dev` with `?memnet=1` in the URL replaces the network with a same-browser channel, so tabs on one machine form a room without relays; add `&as=ann` and `&as=bob` to give each tab its own player identity. `npm run e2e` drives such a room with a headless Chrome (needs `npm i --no-save playwright-core`; set `CHROME` to the browser path if it is not `/usr/bin/google-chrome`).
+
+### How it works
 
 Peer-to-peer over WebRTC, with no game server. Players find each other through public Nostr relays via [Trystero](https://github.com/dmotz/trystero) (`@trystero-p2p/nostr`, 6 relays in parallel); after that, game messages go browser to browser. The 6-character room code (in the link as `#room=ABC234`) is the room name and its password, so relays only see a hashed topic and encrypted handshakes.
 

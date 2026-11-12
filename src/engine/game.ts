@@ -573,6 +573,7 @@ export function validateTrade(s: GameState, t: TradeOffer): string | null {
   const to = s.players[t.to];
   if (!from || !to || from.id === to.id || from.bankrupt || to.bankrupt) return 'Pick another player';
   if (!t.give.length && !t.get.length) return 'Trade must include at least one property';
+  if (!Number.isInteger(t.cash)) return 'Cash must be a whole number';
   if (t.give.some((i) => s.owners[i] !== from.id)) return `${from.name} does not own all offered properties`;
   if (t.get.some((i) => s.owners[i] !== to.id)) return `${to.name} does not own all requested properties`;
   if (t.cash > 0 && from.cash < t.cash) return `${from.name} cannot afford ${money(t.cash)}`;

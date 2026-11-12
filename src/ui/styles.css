@@ -72,9 +72,40 @@ button.wide { width: 100%; }
   .setup-row [data-remove] { grid-column: 3; }
 }
 
+/* ---------- online: setup card, lobby ---------- */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.08em; }
+.online-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.online-card h2, .room-card h2 { margin: 0; font-size: 18px; }
+.field { display: grid; gap: 4px; font-size: 13.5px; }
+.field input { min-width: 0; }
+.join-row { display: flex; gap: 8px; }
+.join-row input { flex: 1; min-width: 0; }
+.room-card { display: grid; gap: 8px; justify-items: start; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.room-card p { margin: 0; }
+.room-code { font: 700 40px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.18em; user-select: all; overflow-wrap: anywhere; }
+.invite { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; }
+.invite-link { flex: 1 1 100%; min-width: 0; font-size: 12.5px; }
+.lobby-row { grid-template-columns: 14px 1fr auto; }
+.lobby-row .seat-name { padding: 8px 0; overflow-wrap: anywhere; }
+.lobby-row select:disabled { opacity: 1; color: var(--muted); }
+.seat-actions { grid-column: 2 / 4; display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-block; padding: 0 7px; border-radius: 999px; border: 1px solid var(--line); font-size: 11.5px; line-height: 18px; color: var(--muted); vertical-align: 1px; }
+.chip.you { border-color: var(--accent); color: var(--accent); }
+.chip.away { border-color: var(--bad); color: var(--bad); }
+.presence { white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; background: var(--muted); }
+.dot.on { background: var(--good); }
+.dot.off { background: transparent; border: 2px solid var(--bad); width: 10px; height: 10px; vertical-align: -1px; }
+@media (max-width: 520px) {
+  .lobby-row { grid-template-columns: 14px 1fr; }
+  .lobby-row select { grid-column: 2; }
+  .seat-actions { grid-column: 2; }
+  .room-code { font-size: 32px; }
+}
+
 /* ---------- game layout ---------- */
 .game { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100vh; height: 100dvh; overflow: hidden; }
-.board-wrap { position: relative; min-width: 0; }
+.board-wrap { position: relative; min-width: 0; min-height: 0; }
 .board-scroll { overflow: auto; height: 100%; background: var(--bg); }
 .panel { overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface); padding: 14px 16px 32px; display: grid; gap: 12px; align-content: start; }
 .zoom { position: absolute; z-index: 5; top: 10px; left: 10px; display: flex; gap: 6px; }
@@ -191,6 +222,16 @@ button.wide { width: 100%; }
 .players li.out { opacity: 0.5; }
 .log { list-style: none; margin: 0; padding-left: 0; font-size: 12.5px; color: var(--muted); display: grid; gap: 3px; max-height: 260px; overflow-y: auto; }
 .footer-actions { margin-top: 8px; }
+.room-bar { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.room-bar p { margin: 0; }
+.room-bar .invite { gap: 6px; }
+.room-bar .invite button { padding: 4px 10px; }
+.confirm { display: grid; gap: 8px; width: 100%; padding: 10px; border: 1px solid var(--bad); border-radius: 10px; }
+.confirm p { margin: 0; }
+.players button.small { padding: 2px 10px; margin-top: 4px; }
+.banner-root { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 15; pointer-events: none; }
+.banner { pointer-events: auto; max-width: 520px; margin: 0 auto; display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--bad); background: var(--surface); box-shadow: 0 4px 18px rgb(0 0 0 / 0.25); }
+.banner p { margin: 0; }
 
 /* ---------- modal ---------- */
 .modal-root { display: none; }
