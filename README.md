@@ -18,6 +18,7 @@ Done:
 - [x] Bot simulation script that reports game length and win rates.
 - [x] CI (tests and build) and a GitHub Pages deploy workflow.
 - [x] City art for USA and South America (16 of 72 cities).
+- [x] Network layer for online multiplayer (`src/net/`). No UI for it yet.
 
 ## To do
 
@@ -32,8 +33,9 @@ In rough priority order.
 7. **Unify the tile style.** USA tiles are 512x512 with rounded card frames; South America tiles are about 210x220 and edge to edge. Pick one style and size.
 8. **Check the real-world data.** City rankings and prices come from general knowledge and have not been checked against a source.
 9. **Roblox port:** rewrite `src/engine/` in Luau and load the same `data/*.json`.
+10. **Online multiplayer UI** on top of `src/net/` (lobby, invite link, trade prompts, host-lost and take-over), then test over the real internet.
 
-Not planned yet: online multiplayer, sound, auctions, mortgages.
+Not planned yet: sound, auctions, mortgages.
 
 ## Play locally
 
@@ -46,7 +48,35 @@ npm run dev        # http://localhost:5173
 
 Hot-seat play for 2 to 6 players on one device; any seat can be a bot. The game autosaves in the browser.
 
-## Layout
+## Online multiplayer
+
+Peer-to-peer over WebRTC, with no game server. Players find each other through public Nostr relays via [Trystero](https://github.com/dmotz/trystero) (`@trystero-p2p/nostr`, 6 relays in parallel); after that, game messages go browser to browser. The 6-character room code (in the link as `#room=ABC234`) is the room name and its password, so relays only see a hashed topic and encrypted handshakes.
+
+- One browser is the host. It holds the real game state, runs the engine and the bots, and sends the full state to everyone after every change. Guests only send requests ("roll", "buy", "build 37") and show what the host sends.
+- Trust model: the host decides everything, so a host can cheat, and anyone with the room code can join, watch, or claim to be the new host. Play with people you would hand the dice to.
+- Guests check every message they receive and the host checks every request: wrong turn, wrong seat, bad shapes and engine errors are refused and the reason is shown to the sender.
+- Trades between humans wait for the other player's answer. While an offer is open the proposer can only cancel it or end the turn, and ending the turn cancels it. Trades with bots are answered at once.
+- A player who reloads gets their seat back (a private key in `localStorage` identifies the browser; snapshots only show a hash of it). The host can hand an absent player's seat to a bot; the player gets it back when they return.
+- The host saves the room in `localStorage`; a host reload resumes it. If the host is gone for good, any guest can take over from the last state they saw. If two hosts ever exist, everyone follows the newest one and the other steps down.
+
+TURN fallback: about 10-15% of networks (strict firewalls, some mobile carriers) block direct connections. Set these at build time to add a TURN relay; without them only direct connections are tried.
+
+| Variable | Example |
+| --- | --- |
+| `VITE_TURN_URLS` | `turn:turn.example.com:3478,turns:turn.example.com:5349` |
+| `VITE_TURN_USERNAME` | `user` |
+| `VITE_TURN_CREDENTIAL` | `secret` |
+
+Anything set here ends up in the static site and is public. Use a TURN service with its own quota limits or short-lived credentials.
+
+Known limits:
+
+- Depends on public Nostr relays being up. Not tested over the real internet yet; the tests use an in-memory network.
+- The host's browser tab must stay open; a sleeping phone or closed tab stalls the game until it comes back or someone takes over.
+- Taking over is manual, and a takeover started from an old state loses whatever happened after it.
+- Two tabs in the same browser count as the same player. Use a private window to test as two players.
+- A spectator cannot join mid-game as a player.
+
 
 | Path | What |
 | --- | --- |
@@ -58,6 +88,7 @@ Hot-seat play for 2 to 6 players on one device; any seat can be a bot. The game 
 | `data/board.json` | The full 144-square board. Generated: edit the files above, then run `npm run board`. |
 | `src/engine/` | Game rules. No DOM code, seeded RNG, all state is one serializable object. Port this to Luau. |
 | `src/ui/` | Browser UI. |
+| `src/net/` | Online multiplayer: protocol and validators, host rules, Trystero transport, session API for the UI. |
 | `scripts/simulate.ts` | Runs bot-only games and prints pacing stats: `npm run simulate -- 300 4 200` (games, players, round cap). |
 | `assets/cities/` | City tile art (WebP, lowercase slug names). Served as `cities/<slug>.webp`. |
 

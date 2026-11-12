@@ -1,0 +1,610 @@
+import { createHash } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AIRPORTS, createGame, endTurn as engineEndTurn, roll as engineRoll, buy as engineBuy, sectionCities, square } from '../src/engine/game';
+import { botStep } from '../src/engine/bot';
+import type { GameState } from '../src/engine/types';
+import {
+  applyIntent, applyLobbyOp, clientIdFromKey, convertToBot, createMemoryTransportHub, createTable, hostSession, joinSession,
+  loadHostSave, needsBotStep, newRoomCode, normalizeRoomCode, parseIntent, parseMessage, roomCodeFromHash, roomLink, setSeat,
+  startGame, stepBot, turnFromEnv,
+} from '../src/net';
+import type { Intent, Session, Snapshot, StorageLike } from '../src/net';
+import { sha256Hex } from '../src/net/protocol';
+
+// ---------- helpers ----------
+
+const flush = async () => {
+  for (let i = 0; i < 100; i++) await Promise.resolve();
+};
+
+function fakeStorage(): StorageLike & { data: Map<string, string> } {
+  const data = new Map<string, string>();
+  return {
+    data,
+    getItem: (k) => data.get(k) ?? null,
+    setItem: (k, v) => void data.set(k, String(v)),
+    removeItem: (k) => void data.delete(k),
+  };
+}
+
+const ROOM = 'ABC234';
+const BOT_MS = 100;
+
+/** Host "Hana" plus guests, all on one in-memory hub. */
+async function setup(guestNames: string[]) {
+  const hub = createMemoryTransportHub();
+  const hostStore = fakeStorage();
+  const hostLink = hub.connect('host');
+  const host = hostSession({ transport: hostLink, roomCode: ROOM, name: 'Hana', storage: hostStore, botDelayMs: BOT_MS, seed: () => 42 });
+  const stores = guestNames.map(() => fakeStorage());
+  const links = guestNames.map((name) => hub.connect(name));
+  const guests = guestNames.map((name, i) =>
+    joinSession({ transport: links[i], roomCode: ROOM, name, storage: stores[i], botDelayMs: BOT_MS, seed: () => 42 }));
+  await flush();
+  /** Drops a connection without session.leave(), like a crash or a reload. */
+  const drop = async (i: number | 'host') => {
+    (i === 'host' ? hostLink : links[i]).leave();
+    await flush();
+  };
+  return { hub, host, hostStore, guests, stores, drop };
+}
+
+/** Host + Gus (seat 1) + Ivy (seat 2) + a bot (seat 3), started. */
+async function startedGame(roundLimit = 60) {
+  const r = await setup(['Gus', 'Ivy']);
+  const [gus, ivy] = r.guests;
+  gus.claimSeat(1);
+  r.host.addSeat();
+  await flush();
+  ivy.claimSeat(2);
+  r.host.addSeat();
+  r.host.setSeat(3, { kind: 'bot' });
+  r.host.setRoundLimit(roundLimit);
+  await flush();
+  r.host.start();
+  await flush();
+  return { ...r, gus, ivy };
+}
+
+const game = (s: Session) => s.snapshot!.game!;
+
+function expectInSync(host: Session, others: Session[]) {
+  for (const s of others) expect(s.snapshot).toEqual(host.snapshot);
+}
+
+/** Plays one step for whoever's turn it is: roll, buy if affordable, else end turn. Bots advance the clock. */
+async function playStep(host: Session, clients: Session[]) {
+  const g = game(host);
+  const seat = host.snapshot!.seats[g.current];
+  if (seat.kind === 'bot') {
+    await vi.advanceTimersByTimeAsync(BOT_MS);
+    await flush();
+    return;
+  }
+  const who = clients.find((c) => c.clientId === seat.clientId)!;
+  const p = g.players[g.current];
+  let intent: Intent;
+  if (g.phase === 'roll') intent = { type: 'roll' };
+  else if (g.pendingBuy !== null && p.cash - (square(g.pendingBuy).price ?? 0) > 300) intent = { type: 'buy' };
+  else intent = { type: 'endTurn' };
+  who.send(intent);
+  await flush();
+  expect(who.lastRejection).toBeNull();
+}
+
+// ---------- protocol ----------
+
+describe('protocol', () => {
+  it('hashes like node:crypto and derives 16-hex client ids', () => {
+    for (const s of ['', 'abc', 'x'.repeat(55), 'x'.repeat(56), 'y'.repeat(130), 'héllo 🎲']) {
+      expect(sha256Hex(s)).toBe(createHash('sha256').update(s).digest('hex'));
+    }
+    expect(clientIdFromKey('ABCDEFGHJKLMNPQRSTUVWXYZ23')).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('rejects malformed, out-of-range and oversized messages without throwing', () => {
+    const bad: unknown[] = [
+      null, 42, 'roll', [], {}, { t: 'nope' },
+      { t: 'hello', v: 1, key: 'short', name: 'A' },
+      { t: 'hello', v: 1, key: 'K'.repeat(26), name: 'x'.repeat(17) },
+      { t: 'hello', v: 1, key: 'K'.repeat(26), name: '   ' },
+      { t: 'hello', v: 1, key: 'K'.repeat(26), name: 'a\u0000b' },
+      { t: 'intent', intent: { type: 'build', index: 1.5 } },
+      { t: 'intent', intent: { type: 'build', index: -1 } },
+      { t: 'intent', intent: { type: 'sell', index: 144 } },
+      { t: 'intent', intent: { type: 'fly', dest: '5' } },
+      { t: 'intent', intent: { type: 'fly', dest: null } },
+      { t: 'intent', intent: { type: 'teleport' } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: [1], get: [], cash: 0.5 } } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 9, give: [1], get: [], cash: 0 } } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: [1, 1], get: [], cash: 0 } } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: Array(500).fill(1), get: [], cash: 0 } } },
+      { t: 'intent', intent: { type: 'respondTrade', tradeId: 1, accept: 'yes' } },
+      { t: 'lobby', op: { op: 'role', roleId: 'king' } },
+      { t: 'lobby', op: { op: 'claim', seat: 6 } },
+      { t: 'lobby', op: { op: 'name', name: 'x'.repeat(40) } },
+      { t: 'snapshot', snapshot: { rev: 1 } },
+      { t: 'reject', reason: 'x'.repeat(10_000) },
+      JSON.parse('{"t":"intent","intent":{"__proto__":{"type":"roll"}}}'),
+    ];
+    for (const m of bad) expect(parseMessage(m)).toBeNull();
+    const evil = { get t() { throw new Error('boom'); } };
+    expect(parseMessage(evil)).toBeNull();
+  });
+
+  it('returns clean copies without extra fields', () => {
+    expect(parseIntent({ type: 'build', index: 3, extra: 'x' })).toEqual({ type: 'build', index: 3 });
+    expect(parseMessage({ t: 'hello', v: 1, key: 'K'.repeat(26), name: '  Ann  ' })).toEqual({ t: 'hello', v: 1, key: 'K'.repeat(26), name: 'Ann' });
+  });
+
+  it('makes and reads room codes', () => {
+    for (let i = 0; i < 200; i++) expect(newRoomCode()).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+    expect(normalizeRoomCode(' abc-234 ')).toBe('ABC234');
+    expect(normalizeRoomCode('ABC10O')).toBeNull();
+    expect(roomCodeFromHash('#room=xyz789')).toBe('XYZ789');
+    expect(roomCodeFromHash('')).toBeNull();
+    expect(roomLink('XYZ789', 'https://me.github.io/world-monopoly/?a=1#old')).toBe('https://me.github.io/world-monopoly/?a=1#room=XYZ789');
+  });
+
+  it('reads TURN servers from env only when set', () => {
+    expect(turnFromEnv({})).toEqual([]);
+    expect(turnFromEnv({ VITE_TURN_URLS: ' , ' })).toEqual([]);
+    expect(turnFromEnv({ VITE_TURN_URLS: 'turn:a.example:3478, turns:a.example:5349', VITE_TURN_USERNAME: 'u', VITE_TURN_CREDENTIAL: 'p' }))
+      .toEqual([{ urls: ['turn:a.example:3478', 'turns:a.example:5349'], username: 'u', credential: 'p' }]);
+  });
+});
+
+// ---------- authority (no transport) ----------
+
+const A = 'a'.repeat(16);
+const B = 'b'.repeat(16);
+
+/** Host A in seat 0, human B in seat 1, bot in seat 2; started, A in action phase with a city each. */
+function tradeTable() {
+  const t = createTable(A, 'Ann');
+  applyLobbyOp(t, B, { op: 'claim', seat: 1 }, 'Ben');
+  t.seats.push({ kind: 'bot', name: 'Bot', roleId: 'diplomat', clientId: null, connected: true });
+  expect(startGame(t, 7)).toEqual({ ok: true });
+  const g = t.game!;
+  g.phase = 'action';
+  const [c0, c1, c2] = sectionCities('usa');
+  g.owners[c0] = 0;
+  g.owners[c1] = 1;
+  g.owners[c2] = 2;
+  return { t, g, c0, c1, c2 };
+}
+
+describe('authority: trades', () => {
+  it('proposes, freezes the proposer, and executes on the target\'s accept', () => {
+    const { t, g, c0, c1 } = tradeTable();
+    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 1, to: 0, give: [c1], get: [], cash: 0 } }).ok).toBe(false);
+    expect(applyIntent(t, 1, { type: 'proposeTrade', offer: { from: 1, to: 0, give: [c1], get: [], cash: 0 } })).toEqual({ ok: false, reason: 'It is not your turn' });
+    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c1], get: [], cash: 0 } })).toEqual({ ok: false, reason: 'Ann does not own all offered properties' });
+    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 50 } })).toEqual({ ok: true });
+    const id = t.pendingTrade!.id;
+    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [], cash: 0 } }).ok).toBe(false);
+    expect(applyIntent(t, 0, { type: 'buy' })).toEqual({ ok: false, reason: 'Waiting for Ben to answer your trade' });
+    expect(applyIntent(t, 0, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: false, reason: 'That trade is not for you' });
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id + 1, accept: true })).toEqual({ ok: false, reason: 'That trade is no longer on the table' });
+    expect(applyIntent(t, 1, { type: 'cancelTrade' })).toEqual({ ok: false, reason: 'You have no pending trade' });
+    const cash0 = t.game!.players[0].cash;
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: true });
+    expect(t.pendingTrade).toBeNull();
+    expect(t.game!.owners[c0]).toBe(1);
+    expect(t.game!.owners[c1]).toBe(0);
+    expect(t.game!.players[0].cash).toBe(cash0 - 50);
+    expect(t.game!.log.at(-1)).toContain('🤝');
+    expect(g).not.toBe(t.game); // actions run on a copy
+  });
+
+  it('declines, cancels, and drops stale trades', () => {
+    const { t, c0, c1 } = tradeTable();
+    const offer = { from: 0, to: 1, give: [c0], get: [c1], cash: 0 };
+    applyIntent(t, 0, { type: 'proposeTrade', offer });
+    applyIntent(t, 1, { type: 'respondTrade', tradeId: t.pendingTrade!.id, accept: false });
+    expect(t.pendingTrade).toBeNull();
+    expect(t.game!.log.at(-1)).toBe("Ben declined Ann's trade.");
+    expect(t.game!.owners[c0]).toBe(0);
+
+    applyIntent(t, 0, { type: 'proposeTrade', offer });
+    const oldId = t.pendingTrade!.id;
+    expect(applyIntent(t, 0, { type: 'cancelTrade' })).toEqual({ ok: true });
+    applyIntent(t, 0, { type: 'proposeTrade', offer: { ...offer, cash: 100 } });
+    // An answer to the withdrawn offer must not accept the new one.
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: oldId, accept: true }).ok).toBe(false);
+    expect(t.pendingTrade).not.toBeNull();
+
+    // Ending the turn cancels it; a late answer is refused.
+    const id = t.pendingTrade!.id;
+    expect(applyIntent(t, 0, { type: 'endTurn' })).toEqual({ ok: true });
+    expect(t.pendingTrade).toBeNull();
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true }).ok).toBe(false);
+    expect(t.game!.owners[c0]).toBe(0);
+  });
+
+  it('re-validates on accept and clears the trade if it no longer works', () => {
+    const { t, c0 } = tradeTable();
+    applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [], cash: 500 } });
+    t.game!.players[0].cash = 10; // e.g. changed by the host's own tooling
+    const r = applyIntent(t, 1, { type: 'respondTrade', tradeId: t.pendingTrade!.id, accept: true });
+    expect(r).toEqual({ ok: false, reason: 'Ann cannot afford $500' });
+    expect(t.pendingTrade).toBeNull();
+    expect(t.game!.owners[c0]).toBe(0);
+  });
+
+  it('clears a trade when a party is handed to a bot, and resolves trades with bots at once', () => {
+    const { t, c0, c1, c2 } = tradeTable();
+    applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 0 } });
+    expect(convertToBot(t, 1)).toEqual({ ok: true });
+    expect(t.pendingTrade).toBeNull();
+
+    const stingy = applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 2, give: [], get: [c2], cash: 0 } });
+    expect(stingy.ok).toBe(false);
+    expect(stingy.ok || stingy.reason).toContain('declined');
+    expect(t.game!.owners[c2]).toBe(2);
+    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 2, give: [c0], get: [], cash: 0 } })).toEqual({ ok: true });
+    expect(t.pendingTrade).toBeNull();
+    expect(t.game!.owners[c0]).toBe(2);
+  });
+
+  it('refuses bot seats, spectators and non-host finish', () => {
+    const { t } = tradeTable();
+    expect(applyIntent(t, null, { type: 'roll' })).toEqual({ ok: false, reason: 'You do not have a seat' });
+    expect(applyIntent(t, 2, { type: 'roll' })).toEqual({ ok: false, reason: 'A bot plays this seat' });
+    expect(applyIntent(t, 1, { type: 'finish' })).toEqual({ ok: false, reason: 'Only the host can end the game' });
+    expect(applyIntent(t, 0, { type: 'finish' })).toEqual({ ok: true });
+    expect(t.game!.phase).toBe('gameOver');
+    expect(applyIntent(t, 0, { type: 'roll' })).toEqual({ ok: false, reason: 'The game is over' });
+  });
+
+  it('enforces lobby rules', () => {
+    const t = createTable(A, 'Ann');
+    expect(applyLobbyOp(t, B, { op: 'claim', seat: 0 }, 'Ben').ok).toBe(false);
+    expect(applyLobbyOp(t, B, { op: 'role', roleId: 'banker' }, 'Ben')).toEqual({ ok: false, reason: 'You have no seat' });
+    expect(applyLobbyOp(t, B, { op: 'claim', seat: 1 }, 'Ben').ok).toBe(true);
+    expect(applyLobbyOp(t, B, { op: 'role', roleId: t.seats[0].roleId }, 'Ben')).toEqual({ ok: false, reason: 'Another seat has that role' });
+    expect(setSeat(t, 1, { name: 'x'.repeat(17) }).ok).toBe(false);
+    expect(startGame(t, 1).ok).toBe(true);
+    expect(applyLobbyOp(t, B, { op: 'release' }, 'Ben')).toEqual({ ok: false, reason: 'The game has already started' });
+  });
+});
+
+describe('determinism', () => {
+  /** Same seed + same intents through the authority gives the same state as driving the engine directly. */
+  function viaAuthority(seed: number) {
+    const t = createTable(A, 'Ann');
+    applyLobbyOp(t, B, { op: 'claim', seat: 1 }, 'Ben');
+    t.seats.push({ kind: 'bot', name: 'Bot', roleId: 'diplomat', clientId: null, connected: true });
+    startGame(t, seed);
+    for (let k = 0; k < 400 && t.game!.phase !== 'gameOver'; k++) {
+      if (needsBotStep(t)) {
+        stepBot(t);
+        continue;
+      }
+      const g = t.game!;
+      applyIntent(t, g.current, g.phase === 'roll' ? { type: 'roll' } : g.pendingBuy !== null ? { type: 'buy' } : { type: 'endTurn' });
+    }
+    return t.game!;
+  }
+  function viaEngine(seed: number) {
+    const g = createGame([
+      { name: 'Ann', isBot: false, roleId: 'entrepreneur' },
+      { name: 'Ben', isBot: false, roleId: 'banker' },
+      { name: 'Bot', isBot: true, roleId: 'diplomat' },
+    ], seed, 60);
+    for (let k = 0; k < 400 && g.phase !== 'gameOver'; k++) {
+      if (g.players[g.current].isBot) {
+        botStep(g);
+        continue;
+      }
+      try {
+        if (g.phase === 'roll') engineRoll(g);
+        else if (g.pendingBuy !== null) engineBuy(g);
+        else engineEndTurn(g);
+      } catch {
+        /* same refusals as the authority */
+      }
+    }
+    return g;
+  }
+
+  it('gives the same final state for the same seed and intents', () => {
+    const a: GameState = viaAuthority(1234);
+    expect(viaAuthority(1234)).toEqual(a);
+    expect(viaEngine(1234)).toEqual(a);
+    expect(viaAuthority(999)).not.toEqual(a);
+  });
+});
+
+// ---------- sessions over the memory transport ----------
+
+describe('sessions', () => {
+  beforeEach(() => void vi.useFakeTimers());
+  afterEach(() => void vi.useRealTimers());
+
+  it('runs a lobby: spectate, claim, unique roles, host-only controls, start', async () => {
+    const { host, guests: [gus, ivy] } = await setup(['Gus', 'Ivy']);
+    expect(host.role).toBe('host');
+    expect(gus.status).toBe('connected');
+    expect(gus.selfSeat).toBeNull();
+    expect(gus.snapshot!.phase).toBe('lobby');
+
+    gus.claimSeat(1);
+    await flush();
+    expect(gus.selfSeat).toBe(1);
+    expect(host.snapshot!.seats[1]).toMatchObject({ kind: 'human', name: 'Gus', connected: true, clientId: gus.clientId });
+
+    ivy.claimSeat(1);
+    await flush();
+    expect(ivy.lastRejection).toBe('That seat is taken');
+    ivy.addSeat();
+    expect(ivy.lastRejection).toBe('Only the host can do that');
+    host.addSeat();
+    await flush();
+    ivy.claimSeat(2);
+    ivy.setRole(host.snapshot!.seats[1].roleId);
+    await flush();
+    expect(ivy.lastRejection).toBe('Another seat has that role');
+    ivy.setRole('landlord');
+    ivy.setName('Ivy V');
+    await flush();
+    expect(host.snapshot!.seats[2]).toMatchObject({ name: 'Ivy V', roleId: 'landlord' });
+
+    host.addSeat();
+    host.start();
+    expect(host.lastRejection).toBe('Fill or remove the open seats first');
+    host.setSeat(3, { kind: 'bot', name: 'Robo' });
+    host.setRoundLimit(5);
+    host.start();
+    await flush();
+    expect(ivy.snapshot!.phase).toBe('playing');
+    expect(game(ivy).players.map((p) => [p.name, p.isBot])).toEqual([['Hana', false], ['Gus', false], ['Ivy V', false], ['Robo', true]]);
+    expect(game(ivy).roundLimit).toBe(5);
+    expectInSync(host, [gus, ivy]);
+  });
+
+  it('plays a full game where every client matches the host after every step', async () => {
+    const { host, gus, ivy } = await startedGame(6);
+    const clients = [host, gus, ivy];
+    let steps = 0;
+    while (game(host).phase !== 'gameOver' && steps++ < 500) {
+      await playStep(host, clients);
+      expectInSync(host, [gus, ivy]);
+    }
+    expect(game(host).phase).toBe('gameOver');
+    expect(steps).toBeGreaterThan(40);
+    expect(game(host).turn).toBeGreaterThan(6);
+    expect(game(host).log.some((l) => l.startsWith('Bot 4 rolled'))).toBe(true);
+    expect(game(gus).winner).not.toBeNull();
+    expect(Object.keys(game(host).owners).length).toBeGreaterThan(0);
+  });
+
+  it('rejects out-of-turn, wrong-seat and illegal intents with the reason', async () => {
+    const { host, gus, ivy, hub } = await startedGame();
+    const watcher = joinSession({ transport: hub.connect('watcher'), roomCode: ROOM, name: 'Wat', storage: fakeStorage() });
+    await flush();
+    expect(watcher.snapshot).toEqual(host.snapshot); // spectators get snapshots
+    const rev = host.snapshot!.rev;
+    gus.send({ type: 'roll' }); // seat 0 (host) is current
+    watcher.send({ type: 'roll' });
+    gus.send({ type: 'finish' });
+    await flush();
+    expect(gus.lastRejection).toBe('Only the host can end the game');
+    expect(watcher.lastRejection).toBe('You do not have a seat');
+    const seen: (string | undefined)[] = [];
+    ivy.subscribe((r) => seen.push(r));
+    ivy.send({ type: 'endTurn' });
+    await flush();
+    expect(seen).toContain('It is not your turn');
+    host.send({ type: 'buy' });
+    expect(host.lastRejection).toBe('nothing to buy'); // engine text
+    host.send({ type: 'endTurn' });
+    expect(host.lastRejection).toBe('roll first');
+    expect(host.snapshot!.rev).toBe(rev);
+    expectInSync(host, [gus, ivy, watcher]);
+  });
+
+  it('ignores malformed and hostile messages without crashing the host', async () => {
+    const { host, gus, hub } = await startedGame();
+    const evil = hub.connect('evil');
+    const inbox: unknown[] = [];
+    evil.onMessage((m) => inbox.push(m));
+    await flush();
+    const rev = host.snapshot!.rev;
+    const junk: unknown[] = [
+      null, 'hi', 7, [1, 2], { t: 'intent', intent: { type: 'roll' } }, // no hello yet
+      { t: 'hello', v: 1, key: '!!', name: 'X' },
+      { t: 'lobby', op: { op: 'claim', seat: 1 } },
+      { t: 'snapshot', snapshot: { ...host.snapshot, hostEpoch: 99, game: { version: 1 } } },
+      { t: 'snapshot', snapshot: { ...host.snapshot, hostEpoch: 99, seats: [] } },
+      { t: 'intent', intent: { type: 'build', index: 1e9 } },
+      { t: 'reject', reason: 'fake' },
+    ];
+    for (const m of junk) evil.send(m);
+    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'intent', intent: { type: 'roll' } }); // valid shape, but a spectator
+    evil.send({ t: 'intent', intent: { type: 'fly', dest: AIRPORTS[0] } });
+    evil.send({ t: 'hello', v: 2, key: 'E'.repeat(26), name: 'Eve' });
+    await flush();
+    expect(host.role).toBe('host');
+    expect(host.snapshot!.rev).toBe(rev);
+    expect(inbox).toContainEqual({ t: 'reject', reason: 'You do not have a seat' });
+    expect(inbox).toContainEqual({ t: 'reject', reason: 'The host runs a different version of the game. Reload the page.' });
+    expect(gus.lastRejection).toBeNull(); // rejections went only to the sender
+    expect(gus.snapshot!.hostEpoch).toBe(host.snapshot!.hostEpoch);
+    host.send({ type: 'roll' });
+    await flush();
+    expect(host.lastRejection).toBeNull();
+    expectInSync(host, [gus]);
+  });
+
+  it('runs human-to-human trades over the wire', async () => {
+    const { host, gus } = await startedGame();
+    host.send({ type: 'roll' });
+    await flush();
+    // Give each a city directly on the host (setup only), then trade them.
+    const [c0, c1] = sectionCities('africa');
+    game(host).owners[c0] = 0;
+    game(host).owners[c1] = 1;
+    host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 0 } });
+    await flush();
+    const pending = gus.snapshot!.pendingTrade!;
+    expect(pending.offer.to).toBe(gus.selfSeat);
+    gus.send({ type: 'respondTrade', tradeId: pending.id, accept: true });
+    await flush();
+    expect(gus.lastRejection).toBeNull();
+    expect(game(gus).owners[c0]).toBe(1);
+    expect(game(gus).owners[c1]).toBe(0);
+    expect(gus.snapshot!.pendingTrade).toBeNull();
+  });
+
+  it('gives a reconnecting guest their seat back by client key, and never broadcasts the key', async () => {
+    const { host, hub, guests: [gus], stores: [gusStore], drop } = await setup(['Gus']);
+    gus.claimSeat(1);
+    await flush();
+    const key = gusStore.data.get('world-monopoly-net-client-v1')!;
+    expect(JSON.stringify(host.snapshot)).not.toContain(key);
+
+    await drop(0); // gus "reloads": old connection drops, a new one uses the same storage
+    expect(host.snapshot!.seats[1].connected).toBe(false);
+    const again = joinSession({ transport: hub.connect('gus-2'), roomCode: ROOM, name: 'Gus', storage: gusStore });
+    await flush();
+    expect(again.clientId).toBe(gus.clientId);
+    expect(again.selfSeat).toBe(1);
+    expect(host.snapshot!.seats[1].connected).toBe(true);
+  });
+
+  it('lets the host hand an absent player to a bot; the game goes on and the player can return', async () => {
+    const { host, gus, ivy, hub, stores, drop } = await startedGame();
+    await drop(0);
+    expect(gus.status).toBe('connected'); // gus's own session cannot tell; the host can
+    expect(host.snapshot!.seats[1].connected).toBe(false);
+    ivy.convertToBot(1);
+    expect(ivy.lastRejection).toBe('Only the host can do that');
+    host.convertToBot(0);
+    expect(host.lastRejection).toBe('The host cannot hand over their own seat');
+
+    host.send({ type: 'roll' });
+    await flush();
+    if (game(host).phase === 'action') host.send({ type: 'endTurn' });
+    await flush();
+    expect(game(host).current).toBe(1); // stuck on Gus...
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(game(host).current).toBe(1);
+    host.convertToBot(1); // ...until the host hands the seat to a bot
+    await flush();
+    expect(host.snapshot!.seats[1].kind).toBe('bot');
+    await vi.advanceTimersByTimeAsync(BOT_MS * 2);
+    await flush();
+    expect(game(host).current).toBe(2);
+    expectInSync(host, [ivy]);
+
+    const back = joinSession({ transport: hub.connect('gus-2'), roomCode: ROOM, name: 'Gus', storage: stores[0] });
+    await flush();
+    expect(host.snapshot!.seats[1]).toMatchObject({ kind: 'human', connected: true });
+    expect(game(host).players[1].isBot).toBe(false);
+    expect(back.selfSeat).toBe(1);
+  });
+
+  it('resumes a reloaded host from its save with hostEpoch + 1', async () => {
+    const { host, hostStore, gus, ivy, hub, drop } = await startedGame();
+    host.send({ type: 'roll' });
+    await flush();
+    const before = structuredClone(host.snapshot!);
+    await drop('host'); // crash, not leave()
+    expect(gus.status).toBe('host-lost');
+    expect(gus.snapshot!.game).toEqual(before.game);
+    gus.send({ type: 'roll' });
+    expect(gus.lastRejection).toBe('Not connected to the host');
+
+    const save = loadHostSave(hostStore)!;
+    expect(save.roomCode).toBe(ROOM);
+    const host2 = hostSession({ transport: hub.connect('host-2'), roomCode: save.roomCode, name: 'Hana', storage: hostStore, resume: save.snapshot, botDelayMs: BOT_MS });
+    await flush();
+    expect(host2.snapshot!.hostEpoch).toBe(before.hostEpoch + 1);
+    expect(host2.selfSeat).toBe(0);
+    expect(gus.status).toBe('connected');
+    expect(host2.snapshot!.seats.map((s) => s.connected)).toEqual([true, true, true, true]);
+    expect(game(host2)).toEqual(before.game);
+    expectInSync(host2, [gus, ivy]);
+    host2.send({ type: 'endTurn' });
+    await flush();
+    expect(game(gus).current).toBe(1);
+  });
+
+  it('lets a guest take over a lost host; the old host demotes itself when it comes back', async () => {
+    const { hostStore, gus, ivy, hub, drop } = await startedGame();
+    await drop('host');
+    const epoch = gus.snapshot!.hostEpoch;
+    gus.takeOverAsHost();
+    await flush();
+    expect(gus.role).toBe('host');
+    expect(ivy.status).toBe('connected');
+    expect(ivy.snapshot!.hostEpoch).toBe(epoch + 2);
+    expect(ivy.snapshot!.seats[0].connected).toBe(false); // old host is away
+
+    // Gus (now host) finishes Hana's turn by handing her seat to a bot; bots now run on Gus.
+    gus.convertToBot(0);
+    await vi.advanceTimersByTimeAsync(BOT_MS * 2);
+    await flush();
+    expect(game(gus).current).toBe(1);
+    expectInSync(gus, [ivy]);
+
+    // Hana reloads and resumes from her stale save (epoch + 1): she must yield to Gus (epoch + 2).
+    const save = loadHostSave(hostStore)!;
+    const hana = hostSession({ transport: hub.connect('host-2'), roomCode: ROOM, name: 'Hana', storage: hostStore, resume: save.snapshot, botDelayMs: BOT_MS });
+    await flush();
+    expect(hana.role).toBe('guest');
+    expect(loadHostSave(hostStore)).toBeNull();
+    expect(hana.selfSeat).toBe(0); // reclaimed from the bot
+    expect(gus.snapshot!.seats[0]).toMatchObject({ kind: 'human', connected: true });
+    expectInSync(gus, [ivy, hana]);
+  });
+
+  it('converges when two hosts exist', async () => {
+    // A live host sees a takeover: it demotes itself.
+    const one = await startedGame();
+    one.ivy.takeOverAsHost();
+    await flush();
+    expect(one.host.role).toBe('guest');
+    expect(one.ivy.role).toBe('host');
+    expectInSync(one.ivy, [one.host, one.gus]);
+    expect(one.ivy.snapshot!.seats.every((s) => s.connected)).toBe(true);
+
+    // Two guests take over at the same moment: equal epochs, the lower clientId wins.
+    const two = await startedGame();
+    await two.drop('host');
+    two.gus.takeOverAsHost();
+    two.ivy.takeOverAsHost();
+    await flush();
+    const [winner, loser] = two.gus.clientId < two.ivy.clientId ? [two.gus, two.ivy] : [two.ivy, two.gus];
+    expect(winner.role).toBe('host');
+    expect(loser.role).toBe('guest');
+    expectInSync(winner, [loser]);
+    expect(winner.snapshot!.seats[loser.selfSeat!].connected).toBe(true);
+  });
+
+  it('works when storage is unavailable', async () => {
+    const throwing: StorageLike = {
+      getItem: () => { throw new Error('denied'); },
+      setItem: () => { throw new Error('denied'); },
+      removeItem: () => { throw new Error('denied'); },
+    };
+    const hub = createMemoryTransportHub();
+    const host = hostSession({ transport: hub.connect('h'), roomCode: ROOM, name: 'Hana', storage: throwing });
+    const gus = joinSession({ transport: hub.connect('g'), roomCode: ROOM, name: 'Gus', storage: null });
+    await flush();
+    gus.claimSeat(1);
+    await flush();
+    expect(host.snapshot!.seats[1].name).toBe('Gus');
+    expect(loadHostSave(throwing)).toBeNull();
+  });
+
+  it('keeps the snapshot small enough for one message', async () => {
+    const { host, gus, ivy } = await startedGame(30);
+    let steps = 0;
+    while (game(host).phase !== 'gameOver' && steps++ < 2000) await playStep(host, [host, gus, ivy]);
+    // Log is capped at 200 lines; a full late-game snapshot stays well under MAX_MESSAGE_BYTES.
+    expect(JSON.stringify({ t: 'snapshot', snapshot: host.snapshot as Snapshot }).length).toBeLessThan(64 * 1024);
+  });
+});
