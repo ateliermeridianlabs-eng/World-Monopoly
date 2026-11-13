@@ -4,7 +4,7 @@ A 2D economy-heavy Monopoly variant played on real world cities. Web version fir
 
 ## Goal
 
-Build a playable, realistic Monopoly variant called World Cities Monopoly. The board is a world map: 72 real cities in 9 sections (Japan, China, Russia, Germany, UK, USA, South America, Africa, Australia), laid along one route around the world. Prices are loosely based on real land value, and the game adds real-life economics: lap income, salary checkpoints, taxes every turn, utility meters, airports with short-, medium- and long-haul flights, seaports joined by sea routes, and regional disasters. The complete rules are under "Rules" below.
+Build a playable, realistic Monopoly variant called World Cities Monopoly. The board is a world map: 72 real cities in 9 sections (Japan, China, Russia, Germany, UK, USA, South America, Africa, Australia), laid along one route around the world. Prices are loosely based on real land value, and the game adds real-life economics: lap income, salary checkpoints, a cost of living every turn, income and property taxes, utility meters, airports with short-, medium- and long-haul flights, seaports joined by sea routes, and regional disasters. The complete rules are under "Rules" below.
 
 Platform plan: a browser version first (this repo), then a Roblox (Luau) port. All content lives in JSON under `data/` so both versions share it.
 
@@ -54,10 +54,10 @@ The complete rules as implemented. Every number lives in `data/*.json` (file and
 
 ### A turn
 
-1. **Roll** two six-sided dice and move forward that many squares. Every checkpoint you pass or land on pays salary; reaching or passing New Year pays lap income and New Year's effects (below). There are no doubles rules and no jail.
+1. **Roll** two six-sided dice and move forward that many squares. Every checkpoint you pass or land on while moving forward pays salary; reaching or passing New Year while moving forward pays lap income and New Year's effects (below). Moving backward, flying and sailing never pay salary or lap income, even when they end on a checkpoint. There are no doubles rules and no jail.
 2. **Land:** the square's effect happens (rent, fee, tax, card, disaster, or the chance to buy).
 3. **Cost of living** is charged.
-4. **Act**, in any order: buy the square you landed on, build or sell buildings, fly (from an airport) or sail (from a seaport) once, trade, then **end turn**.
+4. **Act**, in any order: buy the square you landed on, build or sell buildings, fly (from an airport) or sail (from a seaport) once, trade, then **end turn**. One exception to "any order": buy before you travel. Once you fly or sail, you can no longer buy the square you left (you may buy the one you arrive on).
 
 A player who must miss a turn (Car crash card) is skipped once.
 
@@ -70,12 +70,12 @@ Landing on an unowned city, utility, airport or seaport lets you buy it at its p
 - City tiers by price: low up to $150 (house $50), mid up to $320 (house $100), high above $320 (house $200) (`tiers`).
 - On your turn you may build one level at a time on any city you own: houses 1-4, then a hotel (level 5). No full set is needed for houses, and building need not be even. A hotel needs all 8 cities of that section.
 - Selling a building refunds 50% of its house cost.
-- **Rent** (only cities charge rent): base = 8% of price, rounded, at least $2; times 1 / 4 / 12 / 28 / 34 / 40 for an empty lot / 1 / 2 / 3 / 4 houses / hotel.
+- **Rent** (only cities charge rent): base = 8% of price, rounded, at least $2; the final rent, after the section bonus, is rounded to the nearest dollar; times 1 / 4 / 12 / 28 / 34 / 40 for an empty lot / 1 / 2 / 3 / 4 houses / hotel.
 - **Section bonus:** rent rises 10% for every square the owner holds in that section beyond the first, counting its cities and utility meters (12 squares), capped at +110% (+50% when the owner is a Diplomat).
 
 ### Utilities
 
-Each section has Water, Gas, Electricity and WiFi meters ($100 each). Landing on an owned meter costs nothing. Instead, whenever someone builds in that section they pay every meter they do not own a fee: $10 per house, $30 for a hotel. The fee goes to the meter's owner if the owner still has at least one city in that section; otherwise (or if the meter is unowned) it goes to the bank at the base amount. Owner multipliers: x1.5 for owning all four meters of the section, x1.5 more for holding 5 or more of its 8 cities (the Landlord always gets this one), capped at x2. Industrialists pay 1.5x these fees.
+Each section has Water, Gas, Electricity and WiFi meters ($100 each). Landing on an owned meter costs nothing. Instead, whenever someone builds in that section they pay every meter they do not own a fee: $10 per house, $30 for a hotel. The fee goes to the meter's owner if the owner still has at least one city in that section; otherwise (or if the meter is unowned) it goes to the bank at the base amount (an Industrialist still pays 1.5x). Owner multipliers: x1.5 for owning all four meters of the section, x1.5 more for holding 5 or more of its 8 cities (the Landlord always gets this one), capped at x2. Industrialists pay 1.5x these fees.
 
 ### Airports and flights
 
@@ -90,7 +90,8 @@ Each section has Water, Gas, Electricity and WiFi meters ($100 each). Landing on
 
 - The fare goes to the destination airport's owner (with their +10% per extra airport), or to the bank if nobody owns it. Flying into your own airport is free. You need the cash for the fare up front.
 - On arrival nothing else happens: no landing fee, no further flight or sail this turn. If the airport is unowned you may buy it.
-- Flights do not count toward lap income (below): a flight forward skips that progress, and a long flight across New Year skips the payout altogether.
+- Flights do not count toward lap income (below): a flight forward skips that progress, and a flight across New Year skips that New Year altogether: no lap income, no New Year salary, no Banker interest, no property tax, and it does not count as a lap. The same goes for sailing, and for a card that moves you backward past New Year.
+- **Rounding:** fees and fares are base x owner bonus x role discount, rounded to the nearest dollar (halves round up). A Diplomat pays $38 to sail and $25 for a basic landing fee.
 
 Band for every pair (S/M/L, distance in thousands of km):
 
@@ -108,7 +109,7 @@ Band for every pair (S/M/L, distance in thousands of km):
 ### Seaports and sea routes
 
 - **Docking fee:** landing on a seaport someone else owns costs **$50**, +10% for each other seaport that owner has.
-- **Sailing:** after your move ends on a seaport (by dice or by a card that moves you there), you may sail once that turn along one sea route from that port to the port at its other end. Every route runs both ways. The fare is **$75** (`seaports.sailFare`), paid to the destination port's owner (with their +10% per extra seaport) or to the bank; sailing into your own port is free. Arrival works like a flight's: no fee, no further travel this turn, and you may buy the port if it is unowned. Sailing does not count toward lap income.
+- **Sailing:** after your move ends on a seaport (by dice or by a card that moves you there), you may sail once that turn along one sea route from that port to the port at its other end. Every route runs both ways. The fare is **$75** (`seaports.sailFare`), paid to the destination port's owner (with their +10% per extra seaport) or to the bank; sailing into your own port is free. Arrival works like a flight's: no fee, no salary (even at Baltic Port, which is a checkpoint), no further travel this turn, and you may buy the port if it is unowned. You need the cash for the fare up front; travel never sells your property to pay. Sailing does not count toward lap income.
 - The seaports (the sea zones that used to be highways): East China Port (square 16, East China Sea), Baltic Port (48, Baltic Sea, also a salary checkpoint), North Atlantic Port (80), South Atlantic Port (112), Coral Sea Port (143).
 - The sea routes (`data/board.json seaRoutes`):
 
@@ -131,15 +132,15 @@ Each time you reach or pass New Year (by dice or by a card that moves you forwar
 - This makes it impossible to farm: no mix of rolls, flights, sea routes, swaps or cards pays more than $2,000 per 144 squares actually walked.
 - The side panel shows each player's progress and what New Year would pay now.
 
-Then, at New Year: the lap counter goes up; a **Banker** earns 5% interest on cash above $1,000 (cash after the lap income); then everyone pays **property tax**: 1% of the total purchase price of everything they own (Banker: 2%). New Year is also a salary checkpoint.
+Order at New Year: first the checkpoint salary (its income tax uses your net worth before lap income), then lap income, then the lap counter goes up; a **Banker** earns 5% interest on cash above $1,000 (cash after the lap income); then everyone pays **property tax**: 1% of the total purchase price of everything they own (Banker: 2%). New Year is also a salary checkpoint.
 
 ### Salary and income tax
 
-Passing or landing on a ⭐ checkpoint (every 12 squares, 12 per lap, including New Year) pays **$50** salary minus income tax, rounded. Income tax depends on net worth (cash + purchase prices + building value): under $1,000: 10%; under $3,000: 18%; otherwise 25%. Civil Servants pay a flat 10%; Entrepreneurs get no salary at all.
+Passing or landing on a ⭐ checkpoint (every 12 squares, 12 per lap, including New Year) pays **$50** salary minus income tax, rounded to the nearest dollar ($38 at 25%, $41 at 18%, $45 at 10%). Only forward movement pays: not backward moves, flights or sailing. Income tax depends on net worth (cash + purchase prices + building value): under $1,000: 10%; under $3,000: 18%; otherwise 25%. Civil Servants pay a flat 10%; Entrepreneurs get no salary at all.
 
 ### Cost of living
 
-Charged every turn after you land: $2 per tier level of every city you own (low 1, mid 2, high 3), at least $5. Halved during your first 2 laps. Landlords pay double.
+Charged every turn after you land: $2 per tier level of every city you own (low 1, mid 2, high 3), at least $5. Then it is halved until you have completed 2 laps (so the minimum is $3 at the start), and Landlords pay double. Amounts round to the nearest dollar. Only New Years you walk across count as laps.
 
 ### Tax offices
 
@@ -165,7 +166,7 @@ Landing on a ❓ World Event draws the top card (`cards.json`; 19 cards; the dec
 | Natural disaster | Pay $50 for each city you own in this section. |
 | Visa denied | Go back to the nearest airport behind you (it then works as a normal landing: fee, buy, fly). |
 | Rerouted | Advance to the nearest airport ahead. If someone else owns it, pay double the landing fee. You may then buy it or fly. |
-| Advance to New Year | Advance to New Year, collecting salary and lap income on the way. |
+| Advance to New Year | Advance to New Year, collecting salary at every checkpoint on the way and lap income. The whole distance counts as squares walked, so the lap income is prorated like any other. |
 | Wrong turn | Go back 3 spaces. |
 | House swap | Swap places with a random other player (no square effect, no lap progress). |
 | Hitch a ride on a freighter | Advance to the nearest seaport ahead. If someone else owns it, pay double the docking fee. You may then buy it or sail. |
@@ -173,7 +174,7 @@ Landing on a ❓ World Event draws the top card (`cards.json`; 19 cards; the dec
 
 ### Disasters
 
-Landing on a ⚠️ Disaster strikes that whole section with one of its two disasters (Japan: Earthquake or Typhoon; China: Earthquake or Tsunami; Russia: Wildfire or River Flood; Germany and UK: Heatwave or River Flood; USA and Australia: Wildfire or Tornado; South America: Earthquake or Hurricane; Africa: Drought or Sandstorm). 30% of the time it destroys: each owner there loses every building on their most developed city in the section. Otherwise every developed city in the section loses one level. No refunds; it hits every owner, not just the player who landed.
+Landing on a ⚠️ Disaster strikes that whole section with one of its two disasters (Japan: Earthquake or Typhoon; China: Earthquake or Tsunami; Russia: Wildfire or River Flood; Germany and UK: Heatwave or River Flood; USA and Australia: Wildfire or Tornado; South America: Earthquake or Hurricane; Africa: Drought or Sandstorm). 30% of the time it destroys: each owner there loses every building on their most developed city in the section (on a tie, the one earliest on the route). Otherwise every developed city in the section loses one level. No refunds; it hits every owner, not just the player who landed.
 
 ### Roles
 
@@ -181,14 +182,14 @@ Landing on a ⚠️ Disaster strikes that whole section with one of its two disa
 | --- | --- |
 | Entrepreneur | +$500 starting cash. No salary checkpoints. |
 | Banker | 5% interest per lap on cash above $1,000. Pays double property tax. |
-| Diplomat | Pays half at airports and seaports (landing and docking fees, flight and sea fares). Section rent bonus capped at +50%. |
+| Diplomat | Pays half at airports and seaports (landing and docking fees, flight and sea fares). The section bonus on rent the Diplomat collects is capped at +50%. |
 | Industrialist | Build costs 20% cheaper. Pays 1.5x utility build fees to meters they do not own. |
 | Civil Servant | Salary taxed at a flat 10%. Starts with $300 less. |
 | Landlord | Always gets the utility control bonus (x1.5). Cost of living doubled. |
 
 ### Trading
 
-Any player may offer a trade at any time, on anyone's turn, until the game ends: any of their own properties (cities with their buildings, utilities, airports, seaports) and cash for any of the other player's properties. Each player can have one offer open; the other player accepts or declines. Bots accept when what they get is worth at least 30% more (purchase price plus building value) than what they give.
+Any player may offer a trade at any time, on anyone's turn, until the game ends: any of their own properties (cities with their buildings, utilities, airports, seaports) and cash for any of the other player's properties. The other player accepts or declines. Online, each player can have one offer open at a time; on a shared device the other player confirms on the spot. Bots accept when what they get is worth at least 30% more (purchase price plus building value) than what they give.
 
 ### Debt and bankruptcy
 

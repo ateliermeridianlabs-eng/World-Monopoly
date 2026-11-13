@@ -667,7 +667,7 @@ function detail(s: GameState, index: number, human: boolean) {
     }).join('');
     body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
       <p>Landing fee <strong>${money(Math.round(RULES.airports.landingFee * bonus))}</strong>${bonus > 1 ? ` <span class="muted">(+${Math.round((bonus - 1) * 100)}% for ${esc(owner!.name)}'s other airports)</span>` : ''}</p>
-      <p class="small">Land here by dice to fly once to any other airport. Flights to or from here, base fare (paid to the destination airport's owner, or the bank):</p>
+      <p class="small">End your move here to fly once to any other airport. Flights to or from here, base fare (paid to the destination airport's owner, or the bank):</p>
       <ul class="small route-list">${flights}</ul>
       <p class="small muted">+${RULES.airports.bonusPerExtraAirport * 100}% on fees and fares per extra airport the owner has. Diplomats pay half.</p>`;
   } else if (sq.type === 'seaport') {
@@ -679,7 +679,7 @@ function detail(s: GameState, index: number, human: boolean) {
     }).join('');
     body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
       <p>Docking fee <strong>${money(Math.round(RULES.seaports.dockingFee * bonus))}</strong>${bonus > 1 ? ` <span class="muted">(+${Math.round((bonus - 1) * 100)}% for ${esc(owner!.name)}'s other ports)</span>` : ''}</p>
-      <p class="small">Land here by dice to sail once along a route:</p>
+      <p class="small">End your move here to sail once along a route:</p>
       <ul class="small route-list">${routes}</ul>
       <p class="small muted">Fares go to the destination port's owner, or the bank. +${RULES.seaports.bonusPerExtraSeaport * 100}% per extra seaport the owner has. Diplomats pay half.</p>`;
   } else {
