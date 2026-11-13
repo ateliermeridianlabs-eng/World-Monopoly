@@ -263,3 +263,6 @@ button.wide { width: 100%; }
 .check { display: block; font-size: 13.5px; padding: 3px 0; }
 .check input { margin-right: 6px; }
 .modal input[type="number"] { width: 110px; }
+
+/* Trade button / waiting notice: shown to every seated player, outside the turn's action block. */
+.trade-bar { display: grid; gap: 8px; margin-top: 8px; }

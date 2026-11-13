@@ -1,6 +1,7 @@
 // Host-side rules for online play: lobby, intents, trades, bots. Pure functions over a Snapshot:
 // no DOM, no transport, no timers. Every function that changes something bumps `rev` and returns
 // { ok: true }; a refused request changes nothing and returns { ok: false, reason }.
+// Trades are not tied to the turn: any seated human may offer one at any time (see applyIntent).
 
 import { ROLES, RULES } from '../engine/data';
 import { botAcceptsTrade, botStep } from '../engine/bot';
@@ -13,7 +14,9 @@ export type Result = { ok: true } | { ok: false; reason: string };
 
 const OK: Result = { ok: true };
 const no = (reason: string): Result => ({ ok: false, reason });
+/** Every state change goes through here: offers that can no longer happen are dropped, then `rev` moves. */
 const changed = (t: Snapshot): Result => {
+  sweepTrades(t);
   t.rev += 1;
   return OK;
 };
@@ -40,7 +43,7 @@ export function createTable(hostId: string, hostName: string): Snapshot {
       openSeat(ROLES[1].id),
     ],
     game: null,
-    pendingTrade: null,
+    pendingTrades: [],
     roundLimit: RULES.roundLimit.default,
   };
 }
@@ -175,7 +178,7 @@ export function startGame(t: Snapshot, seed: number): Result {
 /**
  * Host only, mid-game: hand a remote human's seat to a bot (the escape hatch for absent players;
  * works whether or not they are connected). The seat keeps their clientId, so when they reconnect
- * the seat becomes theirs again. A pending trade involving the seat is cancelled.
+ * the seat becomes theirs again. Pending offers involving the seat are cancelled (by `changed`).
  */
 export function convertToBot(t: Snapshot, i: number): Result {
   const seat = t.seats[i];
@@ -186,11 +189,6 @@ export function convertToBot(t: Snapshot, i: number): Result {
   seat.connected = true;
   t.game.players[i].isBot = true;
   note(t.game, `${seat.name} is now played by a bot.`);
-  const p = t.pendingTrade;
-  if (p && (p.offer.from === i || p.offer.to === i)) {
-    t.pendingTrade = null;
-    note(t.game, 'The pending trade was cancelled.');
-  }
   return changed(t);
 }
 
@@ -219,11 +217,14 @@ function onCopy(t: Snapshot, fn: (g: GameState) => void): Result {
 
 /**
  * Applies a seated player's intent. Rules on top of the engine:
- * - turn actions and `proposeTrade` only from the seat whose turn it is (`game.current`), never a bot seat;
- * - `respondTrade` only from the trade's target, quoting the current `pendingTrade.id`;
- * - `cancelTrade` only from the proposer; `finish` only from the host's own seat;
- * - while a trade is pending the proposer may only cancel it or end the turn, and ending the turn
- *   cancels it (so the target always answers the offer it saw);
+ * - turn actions only from the seat whose turn it is (`game.current`), never a bot seat;
+ * - trades ignore the turn: any seated human may `proposeTrade` to another player at any time while the
+ *   game runs, with at most one outstanding offer each (`pendingTrades`, one per proposer). A pending
+ *   offer does not block the proposer's turn actions and survives the end of the turn;
+ * - `respondTrade` only from the offer's target, quoting its `id`; `cancelTrade` only from the proposer;
+ *   `finish` only from the host's own seat;
+ * - offers that can no longer happen (game over, a party bankrupt or turned into a bot, `validateTrade`
+ *   failing) are dropped after every change, with a log note;
  * - a trade with a bot is answered at once by `botAcceptsTrade`; a refusal comes back as a rejection.
  * Engine errors come back as `{ ok: false, reason }` with the engine's message.
  */
@@ -233,7 +234,6 @@ export function applyIntent(t: Snapshot, seatIndex: number | null, intent: Inten
   if (seatIndex === null || !t.seats[seatIndex]) return no('You do not have a seat');
   if (t.seats[seatIndex].kind !== 'human') return no('A bot plays this seat');
   if (g.phase === 'gameOver') return no('The game is over');
-  const pending = t.pendingTrade;
 
   let r: Result;
   switch (intent.type) {
@@ -241,10 +241,13 @@ export function applyIntent(t: Snapshot, seatIndex: number | null, intent: Inten
       if (t.seats[seatIndex].clientId !== t.hostId) return no('Only the host can end the game');
       r = onCopy(t, endGameByNetWorth);
       break;
+    case 'proposeTrade':
+      return propose(t, g, seatIndex, intent.offer);
     case 'respondTrade': {
-      if (!pending || pending.id !== intent.tradeId) return no('That trade is no longer on the table');
+      const pending = t.pendingTrades.find((p) => p.id === intent.tradeId);
+      if (!pending) return no('That trade is no longer on the table');
       if (pending.offer.to !== seatIndex) return no('That trade is not for you');
-      t.pendingTrade = null;
+      t.pendingTrades = t.pendingTrades.filter((p) => p !== pending);
       const from = g.players[pending.offer.from].name;
       if (!intent.accept) {
         note(g, `${g.players[seatIndex].name} declined ${from}'s trade.`);
@@ -258,28 +261,25 @@ export function applyIntent(t: Snapshot, seatIndex: number | null, intent: Inten
       }
       break;
     }
-    case 'cancelTrade':
-      if (!pending || pending.offer.from !== seatIndex) return no('You have no pending trade');
-      t.pendingTrade = null;
+    case 'cancelTrade': {
+      const mine = t.pendingTrades.find((p) => p.offer.from === seatIndex);
+      if (!mine) return no('You have no pending trade');
+      t.pendingTrades = t.pendingTrades.filter((p) => p !== mine);
       note(g, `${g.players[seatIndex].name} withdrew their trade offer.`);
       return changed(t);
-    default: {
-      if (g.current !== seatIndex) return no('It is not your turn');
-      if (pending && intent.type !== 'endTurn') return no(`Waiting for ${g.players[pending.offer.to].name} to answer your trade`);
-      if (intent.type === 'proposeTrade') return propose(t, g, seatIndex, intent.offer);
-      r = onCopy(t, (d) => TURN_ACTIONS[intent.type](d, intent));
     }
+    default:
+      if (g.current !== seatIndex) return no('It is not your turn');
+      r = onCopy(t, (d) => TURN_ACTIONS[intent.type](d, intent));
   }
-  if (r.ok) {
-    sweepTrade(t);
-    changed(t);
-  }
-  return r;
+  return r.ok ? changed(t) : r;
 }
 
 function propose(t: Snapshot, g: GameState, seatIndex: number, offer: Extract<Intent, { type: 'proposeTrade' }>['offer']): Result {
   if (offer.from !== seatIndex) return no('You can only offer your own properties');
-  if (g.phase !== 'action') return no('Roll first');
+  if (g.players[seatIndex].bankrupt) return no('You are bankrupt');
+  if (t.pendingTrades.some((p) => p.offer.from === seatIndex)) return no('You already have a trade offer out. Cancel it first');
+  if (t.pendingTrades.length >= t.seats.length) return no('Too many trade offers are open');
   const err = validateTrade(g, offer);
   if (err) return no(err);
   const target = g.players[offer.to];
@@ -288,20 +288,22 @@ function propose(t: Snapshot, g: GameState, seatIndex: number, offer: Extract<In
     const r = onCopy(t, (d) => executeTrade(d, offer));
     return r.ok ? changed(t) : r;
   }
-  t.pendingTrade = { id: t.rev + 1, offer: { ...offer, give: [...offer.give], get: [...offer.get] } };
+  // rev only grows, so ids never repeat and an answer to an old offer cannot accept a newer one.
+  t.pendingTrades.push({ id: t.rev + 1, offer: { ...offer, give: [...offer.give], get: [...offer.get] } });
   note(g, `${g.players[seatIndex].name} offered ${target.name} a trade.`);
   return changed(t);
 }
 
-/** Drops a pending trade that can no longer happen: turn moved on, game over, or a party went bankrupt. */
-function sweepTrade(t: Snapshot) {
-  const p = t.pendingTrade;
+/** Drops offers that can no longer happen (see applyIntent), logging whose offer it was. Silent after game over. */
+function sweepTrades(t: Snapshot) {
   const g = t.game;
-  if (!p || !g) return;
-  const stale = g.phase !== 'action' || g.current !== p.offer.from || g.players[p.offer.from].bankrupt || g.players[p.offer.to].bankrupt;
-  if (!stale) return;
-  t.pendingTrade = null;
-  note(g, 'The pending trade was cancelled.');
+  if (!g || !t.pendingTrades.length) return;
+  const over = g.phase === 'gameOver';
+  t.pendingTrades = t.pendingTrades.filter(({ offer }) => {
+    const live = !over && [offer.from, offer.to].every((i) => t.seats[i]?.kind === 'human' && !g.players[i].bankrupt) && !validateTrade(g, offer);
+    if (!live && !over) note(g, `${g.players[offer.from].name}'s trade offer to ${g.players[offer.to].name} was cancelled.`);
+    return live;
+  });
 }
 
 // ---------- bots ----------
@@ -316,7 +318,6 @@ export function needsBotStep(t: Snapshot): boolean {
 export function stepBot(t: Snapshot): boolean {
   if (!needsBotStep(t)) return false;
   if (!onCopy(t, botStep).ok) return false;
-  sweepTrade(t);
   changed(t);
   return true;
 }

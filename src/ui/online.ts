@@ -140,7 +140,7 @@ function roomView(session: Session): RoomView | null {
     hostId: snap.hostId,
     seats: snap.seats,
     status: session.status,
-    pendingTrade: snap.pendingTrade,
+    pendingTrades: snap.pendingTrades,
     canFinish: session.isHost && self !== null && snap.seats[self]?.clientId === snap.hostId,
     online: session.peers,
     networkError: session.networkError,

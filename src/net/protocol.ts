@@ -7,7 +7,8 @@ import { HOTEL } from '../engine/game';
 import type { GameState, TradeOffer } from '../engine/types';
 
 /** Bumped when the wire format changes; a host rejects guests with another version. */
-export const PROTOCOL_VERSION = 1;
+/** 2: `Snapshot.pendingTrade` became the list `pendingTrades`; trades are allowed at any time. */
+export const PROTOCOL_VERSION = 2;
 /** Same cap as the name inputs in the hot-seat UI. */
 export const NAME_MAX = 16;
 
@@ -24,11 +25,11 @@ export type Intent =
   /** Fly to another airport square (board index). */
   | { type: 'fly'; dest: number }
   | { type: 'endTurn' }
-  /** Current player offers a trade. `offer.from` must be the sender's seat. */
+  /** Any seated player offers a trade at any time (one outstanding offer each). `offer.from` must be the sender's seat. */
   | { type: 'proposeTrade'; offer: TradeOffer }
-  /** Target of the pending trade answers it. `tradeId` must match `Snapshot.pendingTrade.id`. */
+  /** Target of an offer answers it. `tradeId` must match that offer's `Snapshot.pendingTrades[].id`. */
   | { type: 'respondTrade'; tradeId: number; accept: boolean }
-  /** Proposer withdraws the pending trade. */
+  /** Proposer withdraws their outstanding offer. */
   | { type: 'cancelTrade' }
   /** End the game now by net worth. Only the host's own seat may send this. */
   | { type: 'finish' };
@@ -60,7 +61,7 @@ export interface Seat {
 }
 
 export interface PendingTrade {
-  /** Changes with every proposal; `respondTrade` must quote it so a stale answer cannot accept a newer offer. */
+  /** Unique across offers (the host's rev at proposal time + 1); `respondTrade` must quote it so a stale answer cannot accept a newer offer. */
   id: number;
   offer: TradeOffer;
 }
@@ -78,8 +79,8 @@ export interface Snapshot {
   seats: Seat[];
   /** null in the lobby. Stays set after game over (`game.phase === 'gameOver'`). */
   game: GameState | null;
-  /** Human-to-human trade waiting for the target's answer. Not part of GameState. */
-  pendingTrade: PendingTrade | null;
+  /** Human-to-human offers waiting for their targets' answers: at most one per proposer, so at most `seats.length`. Not part of GameState. */
+  pendingTrades: PendingTrade[];
   /** Rounds before the game ends by net worth; 0 = no limit. */
   roundLimit: number;
 }
@@ -220,18 +221,23 @@ export function validGameState(v: unknown, playerCount: number): v is GameState 
 /** Validates a snapshot (from the wire or from storage). Returns it or null. */
 export function parseSnapshot(v: unknown): Snapshot | null {
   if (!isObj(v)) return null;
-  const { rev, hostEpoch, hostId, phase, seats, game, pendingTrade, roundLimit } = v;
+  const { rev, hostEpoch, hostId, phase, seats, game, pendingTrades, roundLimit } = v;
   if (!isInt(rev, 0, Number.MAX_SAFE_INTEGER) || !isInt(hostEpoch, 0, Number.MAX_SAFE_INTEGER)) return null;
   if (typeof hostId !== 'string' || !ID_RE.test(hostId) || !isInt(roundLimit, 0, 999)) return null;
   if (!Array.isArray(seats) || seats.length < 1 || seats.length > MAX_SEATS || !seats.every(validSeat)) return null;
+  if (!Array.isArray(pendingTrades) || pendingTrades.length > seats.length) return null;
   if (phase === 'lobby') {
-    if (game !== null || pendingTrade !== null) return null;
+    if (game !== null || pendingTrades.length) return null;
   } else if (phase === 'playing') {
     if (!validGameState(game, seats.length)) return null;
-    if (pendingTrade !== null) {
-      if (!isObj(pendingTrade) || !isInt(pendingTrade.id, 0, Number.MAX_SAFE_INTEGER)) return null;
-      const offer = parseOffer(pendingTrade.offer);
-      if (!offer || offer.from >= seats.length || offer.to >= seats.length) return null;
+    const ids = new Set<number>();
+    const proposers = new Set<number>();
+    for (const pt of pendingTrades) {
+      if (!isObj(pt) || !isInt(pt.id, 0, Number.MAX_SAFE_INTEGER) || ids.has(pt.id)) return null;
+      const offer = parseOffer(pt.offer);
+      if (!offer || offer.from >= seats.length || offer.to >= seats.length || offer.from === offer.to || proposers.has(offer.from)) return null;
+      ids.add(pt.id);
+      proposers.add(offer.from);
     }
   } else {
     return null;

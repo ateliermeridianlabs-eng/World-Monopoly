@@ -568,7 +568,9 @@ export function endGameByNetWorth(s: GameState) {
 
 // ---------- trading ----------
 
+/** Pure and independent of whose turn it is or the phase; only a finished game refuses trades. */
 export function validateTrade(s: GameState, t: TradeOffer): string | null {
+  if (s.phase === 'gameOver') return 'The game is over';
   const from = s.players[t.from];
   const to = s.players[t.to];
   if (!from || !to || from.id === to.id || from.bankrupt || to.bankrupt) return 'Pick another player';
