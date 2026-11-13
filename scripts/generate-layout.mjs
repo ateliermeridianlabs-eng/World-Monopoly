@@ -1,182 +1,397 @@
-// Builds data/layout.json: where each of the 144 squares sits on the world-map board, plus the backdrop shapes.
-// Run: npm run layout (npm run board runs it too).
+// Builds data/layout.json: the world-map board. Every square is a territory on the map: 126 land parcels that
+// split the 9 playable regions, and 18 sea zones (airports, highways, tax offices and New Year) on the crossings
+// between them. Also decides the order of the 14 squares inside each section, which scripts/generate-board.mjs
+// copies into data/board.json. Run: npm run board (runs this, then generate-board). Deterministic.
 //
-// Units are board cells: a tile is a 1 x 1 square, upright, centred on (x, y); (0, 0) is the map's top-left.
-// The route is one closed centripetal Catmull-Rom spline through the hand-placed waypoints below. Each group
-// of waypoints is pinned to a square index (`at` for its first waypoint, `to` for its last); squares between
-// two pinned waypoints are spaced evenly along the curve, by Chebyshev (max |dx|, |dy|) distance, so upright
-// tiles on a diagonal stay as far apart as on a straight run. Fails (exit code 1) if any rule below breaks.
-// The map is stylized, not to scale: Europe is enlarged and every region gets room for its 14 tiles.
+// Units are map cells, origin top-left, y down. Steps:
+//  1. Project each region's outline and its cities (real lat/lon from data/sections.json) with the region's own
+//     cartogram projection (scripts/world.mjs).
+//  2. Split each region into 14 parcels: a Voronoi diagram of 14 seeds clipped to the outline. 8 seeds are the
+//     cities; the other 6 (utilities, World Event, Disaster) start at hand-picked spots. A few rounds of
+//     constrained Lloyd relaxation even out the sizes: the 6 free seeds move to their parcel's centroid, a city
+//     seed moves at most CITY_SLACK cells from its city and never so far that the city leaves its parcel.
+//  3. Grow each sea crossing as an organic blob of open water, cut back where it would touch land, and split it
+//     into its two squares.
+//  4. Order each section's 14 parcels: start at the parcel nearest the crossing before it, end at the parcel
+//     nearest the crossing after it, and visit every parcel once, stepping between neighbours (shared border, or
+//     a short strait between islands) wherever possible, shortest walk first (exact search over all orders).
+// Fails (exit code 1) if a rule checked in tests/layout.test.ts breaks.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { area, centroid, clipHalf, dist, edgeDist, inside, isSimple, pole, polyDist, rayHit, rng, splitHalf, tidy, unionTouching } from './geo.mjs';
+import { AMUR, BACKDROP, CROSSINGS, DATE_LINE, HEIGHT, OCEANS, PROJ, REGIONS, TITLE, WIDTH } from './world.mjs';
 
-const board = JSON.parse(readFileSync('data/board.json', 'utf8'));
-const N = board.squares.length;
+const sections = JSON.parse(readFileSync('data/sections.json', 'utf8')).sections;
+const rules = JSON.parse(readFileSync('data/rules.json', 'utf8'));
 
-const WIDTH = 42;
-const HEIGHT = 25;
-
-// Section start index s = 1 + 16 * k (14 section squares, then 2 gap squares; the last gap is 1 square).
-const ROUTE = [
-  { at: 0, pts: [[39.3, 15.7]] }, // New Year, in the Pacific by the date line
-  // Japan: up the islands, then back down their west side.
-  { at: 1, to: 14, pts: [[40.4, 14.6], [40.8, 12.6], [41.0, 10.2], [40.8, 7.8], [40.2, 5.6], [39.0, 4.4], [37.8, 5.2], [37.8, 7.2], [38.4, 9.0], [37.9, 10.2]] },
-  // China: west along the south, back east further north.
-  { at: 17, to: 30, pts: [[34.6, 12.0], [32.6, 12.4], [30.2, 12.2], [28.4, 11.0], [28.6, 9.4], [30.4, 8.6], [32.6, 8.8], [34.4, 8.2], [35.0, 6.6]] },
-  // Russia: a long wavy run west across Siberia to Moscow.
-  { at: 33, to: 46, pts: [[35.6, 3.4], [34.2, 1.4], [32.0, 1.4], [30.0, 2.6], [28.0, 3.6], [26.0, 3.0], [24.2, 1.8], [22.0, 2.8]] },
-  // Germany: a three-lane serpentine.
-  { at: 49, to: 62, pts: [[22.6, 6.0], [23.4, 8.4], [22.8, 10.2], [21.4, 10.4], [20.8, 8.8], [20.6, 6.8], [19.6, 5.4], [18.2, 5.8], [17.8, 7.8], [18.4, 9.6]] },
-  // UK: up Britain, round Scotland, down Ireland's side.
-  { at: 65, to: 78, pts: [[15.2, 9.8], [15.0, 7.8], [15.2, 5.6], [14.4, 3.8], [13.0, 3.0], [11.8, 4.2], [12.4, 6.2], [12.0, 8.0], [11.0, 9.2]] },
-  // USA: west along the north, back east along the south.
-  { at: 81, to: 94, pts: [[7.9, 6.0], [6.4, 4.4], [4.2, 4.6], [2.4, 5.8], [2.6, 7.8], [4.4, 8.6], [6.4, 8.4], [8.0, 9.4], [8.6, 11.0]] },
-  // South America: down the Andes, round Cape Horn, up the Atlantic coast.
-  { at: 97, to: 110, pts: [[10.4, 14.4], [8.8, 15.6], [8.0, 17.6], [8.2, 19.6], [9.0, 21.6], [10.2, 20.6], [11.0, 18.6], [12.2, 17.2], [13.6, 16.4]] },
-  // Africa: along the north, down the east, to the Cape.
-  { at: 113, to: 126, pts: [[17.0, 14.4], [17.8, 12.8], [19.8, 12.4], [22.0, 12.4], [24.0, 13.0], [24.6, 14.8], [23.4, 16.4], [22.6, 18.4], [22.0, 20.8]] },
-  // Australia: along the south coast, up the east coast.
-  { at: 129, to: 142, pts: [[25.4, 20.6], [27.0, 21.4], [28.6, 21.6], [30.2, 21.0], [31.8, 21.6], [33.6, 21.2], [34.8, 19.8], [35.6, 17.8], [37.0, 16.6]] },
+/** Smallest inscribed-circle radius (cells) of any square: room for its art, name, price and tokens. */
+export const MIN_RADIUS = 0.72;
+const CITY_SLACK = 1.4;
+const SPECIALS = [...rules.utilities.kinds.map((k) => k.id), 'event', 'disaster'];
+// Squares on each crossing (after section k). The last crossing runs back into New Year.
+const GAPS = [
+  ['airport', 'highway'], ['airport', 'tax'], ['airport', 'highway'], ['airport', 'tax'],
+  ['airport', 'highway'], ['airport', 'tax'], ['airport', 'highway'], ['airport', 'tax'],
+  ['highway', 'newYear'],
 ];
+const problems = [];
 
-// Open-ocean box for the title and legend (must cover no tile).
-const TITLE = { x: 11.4, y: 21.9, w: 13.4, h: 2.8 };
+// ---------- projection ----------
 
-// Simplified continents, hand-drawn in the same cell units; the client draws each as a smooth closed curve.
-const CONTINENTS = {
-  northAmerica: [[0.6, 2.2], [2.5, 1.2], [5, 1.4], [7.5, 0.9], [9.5, 1.6], [10.2, 2.8], [9.6, 3.6], [10.3, 4.6], [9.8, 5.8], [9.6, 7.2], [9.2, 8.6], [9.6, 9.8], [10.6, 11.6], [11.2, 13.0], [10.6, 13.6], [9.6, 12.8], [8.2, 11.6], [7, 10.6], [5.4, 9.8], [3.4, 9.6], [1.8, 8.8], [1.2, 7.2], [1.4, 5.4], [0.8, 4.2], [0.2, 3.2]],
-  greenland: [[9.2, 0.6], [11.6, 0.4], [12.4, 1.2], [11.4, 2.6], [10.2, 2.8], [9.4, 1.8]],
-  southAmerica: [[9.4, 13.4], [11.2, 13.2], [12.8, 13.8], [14.0, 14.6], [14.9, 15.8], [14.6, 17.0], [13.2, 18.2], [12.0, 19.4], [10.8, 21.0], [9.6, 22.8], [8.6, 22.8], [7.8, 21.2], [7.4, 19.0], [7.2, 17.0], [7.6, 15.4], [8.4, 14.2]],
-  britain: [[14.2, 2.4], [15.6, 3.0], [16.2, 4.6], [16.4, 6.6], [16.4, 8.6], [15.8, 10.4], [14.6, 10.6], [14.4, 8.8], [14.6, 6.6], [14.2, 4.6], [13.6, 3.2]],
-  ireland: [[12.2, 3.6], [13.6, 4.4], [13.4, 6.2], [13.0, 8.0], [11.8, 9.6], [10.8, 8.8], [11.4, 7.2], [11.4, 5.0]],
-  eurasia: [[16.6, 11.0], [16.4, 9.4], [17.0, 8.4], [16.8, 7.2], [17.6, 6.0], [18.6, 5.0], [18.4, 3.6], [18.0, 2.2], [19.2, 0.8], [21.6, 0.6], [24, 0.9], [27, 0.5], [30, 0.4], [33, 0.5], [36, 0.4], [38.6, 0.8], [39.4, 2.0], [38.2, 2.8], [37.2, 3.6], [36.8, 5.4], [37.0, 7.4], [36.6, 8.4], [36.0, 8.0], [35.8, 9.4], [36.2, 10.8], [35.8, 12.4], [34.0, 13.4], [32.6, 13.6], [32.8, 14.8], [31.8, 15.6], [31.0, 16.4], [30.6, 15.0], [29.6, 13.8], [28.4, 13.4], [27.4, 15.0], [27.2, 15.2], [26.2, 13.6], [25.4, 12.0], [24.6, 11.6], [23.4, 11.2], [22.4, 11.0], [21.0, 11.2], [20.0, 11.2], [18.6, 11.0], [17.6, 11.6]],
-  japan: [[39.4, 4.2], [40.8, 4.6], [41.6, 6.6], [41.6, 9.4], [41.4, 12.2], [40.6, 13.4], [39.8, 12.0], [39.0, 10.6], [37.4, 10.8], [37.2, 9.2], [37.4, 6.6], [38.0, 4.8]],
-  africa: [[16.4, 13.0], [17.6, 12.0], [20, 11.9], [22.6, 11.9], [23.6, 12.4], [24.4, 13.6], [25.6, 14.2], [25.0, 15.6], [24.4, 17.0], [23.8, 18.6], [23.0, 20.4], [22.2, 21.6], [21.2, 21.4], [20.4, 19.6], [19.8, 17.6], [19.2, 16.4], [17.8, 16.0], [16.4, 15.6], [15.6, 14.4]],
-  madagascar: [[25.2, 18.0], [25.8, 18.6], [25.4, 19.6], [24.8, 19.0]],
-  australia: [[25.0, 19.6], [26.4, 17.6], [28.4, 17.0], [30.0, 16.2], [31.4, 16.8], [32.4, 15.8], [33.4, 16.0], [34.4, 17.4], [35.8, 17.2], [36.8, 18.6], [36.4, 20.6], [35.0, 22.4], [32.6, 23.0], [30.4, 22.6], [28.6, 23.0], [26.4, 22.8], [25.0, 21.6]],
-  newZealand: [[38.8, 19.6], [39.6, 20.6], [39.0, 22.2], [38.2, 21.4]],
-};
-
-// ---------- spline ----------
-
-function catmull(p0, p1, p2, p3, t) {
-  // Centripetal Catmull-Rom (alpha 0.5): no cusps or self-intersections inside a segment.
-  const d = (a, b) => Math.max(Math.hypot(b.x - a.x, b.y - a.y) ** 0.5, 1e-6);
-  const t0 = 0, t1 = t0 + d(p0, p1), t2 = t1 + d(p1, p2), t3 = t2 + d(p2, p3);
-  const u = t1 + (t2 - t1) * t;
-  const lerp = (a, b, ta, tb) => ({ x: ((tb - u) * a.x + (u - ta) * b.x) / (tb - ta), y: ((tb - u) * a.y + (u - ta) * b.y) / (tb - ta) });
-  const a1 = lerp(p0, p1, t0, t1), a2 = lerp(p1, p2, t1, t2), a3 = lerp(p2, p3, t2, t3);
-  const b1 = lerp(a1, a2, t0, t2), b2 = lerp(a2, a3, t1, t3);
-  return lerp(b1, b2, t1, t2);
+function knots(k, v) {
+  let i = 0;
+  while (i < k.length - 2 && (k[0][0] < k[1][0] ? v > k[i + 1][0] : v < k[i + 1][0])) i++;
+  const [a, b] = [k[i], k[i + 1]];
+  return a[1] + ((v - a[0]) * (b[1] - a[1])) / (b[0] - a[0]);
 }
 
-const cheb = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+function makeProj(def) {
+  const base = ([lon, lat]) => {
+    let y = knots(def.lat, lat);
+    for (const alt of def.latAlt ?? []) {
+      const w = Math.max(0, Math.min(1, (lon - alt.from) / (alt.to - alt.from)));
+      y = y * (1 - w) + knots(alt.lat, lat) * w;
+    }
+    return [knots(def.lon, lon), y];
+  };
+  const lenses = [];
+  const lens = (p) => {
+    for (const { c, r, d } of lenses) {
+      const dx = p[0] - c[0], dy = p[1] - c[1], l = Math.hypot(dx, dy);
+      if (l === 0 || l >= r) continue;
+      const t = l / r, f = (r * ((d + 1) * t) / (d * t + 1)) / l;
+      p = [c[0] + dx * f, c[1] + dy * f];
+    }
+    return p;
+  };
+  for (const L of def.lenses ?? []) lenses.push({ c: lens(base(L.at)), r: L.r, d: L.d });
+  return (ll) => lens(base(ll));
+}
+const proj = Object.fromEntries(Object.entries(PROJ).map(([k, v]) => [k, makeProj(v)]));
+const projOf = (p) => (p === 'map' ? (q) => q : typeof p === 'string' ? proj[p] : makeProj(p));
+
+/** Projects a closed [lon, lat] outline, adding points along long edges so lenses bend them smoothly. */
+function projectOutline(runs) {
+  const pts = [];
+  for (const { pts: ll, p } of runs) for (const q of ll) pts.push({ ll: q, p });
+  const out = [];
+  pts.forEach((a, i) => {
+    const b = pts[(i + 1) % pts.length];
+    const pa = a.p(a.ll), pb = (a.p === b.p ? a.p : b.p)(b.ll);
+    const n = a.p === b.p ? Math.max(1, Math.ceil(dist(pa, pb) / 0.3)) : 1;
+    for (let k = 0; k < n; k++) out.push(a.p([a.ll[0] + ((b.ll[0] - a.ll[0]) * k) / n, a.ll[1] + ((b.ll[1] - a.ll[1]) * k) / n]));
+  });
+  return simplify(out, 0.02);
+}
+
+/** Douglas-Peucker on a closed polygon. */
+function simplify(poly, tol) {
+  const keep = new Array(poly.length).fill(false);
+  const rec = (i, j) => {
+    let best = -1, bd = tol;
+    for (let k = i + 1; k < j; k++) {
+      const d = segDistOpen(poly[k], poly[i], poly[j % poly.length]);
+      if (d > bd) { bd = d; best = k; }
+    }
+    if (best >= 0) { keep[best] = true; rec(i, best); rec(best, j); }
+  };
+  const far = poly.reduce((b, p, k) => (dist(p, poly[0]) > dist(poly[b], poly[0]) ? k : b), 0);
+  keep[0] = keep[far] = true;
+  rec(0, far);
+  rec(far, poly.length);
+  return poly.filter((_, k) => keep[k]);
+}
+function segDistOpen(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy;
+  const t = l ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)) : 0;
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+
+const clockwise = (poly) => (area(poly) < 0 ? [...poly].reverse() : poly);
+const round = (v) => Math.round(v * 100) / 100;
+const roundPoly = (poly) => tidy(poly.map(([x, y]) => [round(x), round(y)]), 1e-9);
+
+// ---------- regions and parcels ----------
 
 /**
- * Places the squares along the closed spline through `route`. Between two pinned waypoints the squares are
- * equal Chebyshev chords apart (max |dx|, |dy|), the step found by binary search so the walk lands on the next
- * pin. Equal chords, not equal arc length, keep upright tiles on a diagonal or a bend as far apart as on a
- * straight run. Returns the squares and the step used for each span (keyed by the span's first index).
+ * Power diagram (Voronoi with weights) of `seeds` clipped to `piece`: for each seed, the pieces of the outline
+ * where |x - seed|^2 - weight is smallest. A larger weight pushes that cell's borders outward.
  */
-function place(route) {
-  const waypoints = [];
-  for (const g of route) {
-    g.pts.forEach(([x, y], i) => {
-      const w = { x, y };
-      if (i === 0) w.pin = g.at;
-      if (g.to !== undefined && i === g.pts.length - 1) w.pin = g.to;
-      waypoints.push(w);
+function voronoiParts(piece, seeds, w = seeds.map(() => 0)) {
+  return seeds.map((s, i) => {
+    let parts = [piece];
+    seeds.forEach((t, j) => {
+      if (j === i) return;
+      parts = parts.flatMap((poly) => splitHalf(poly, t[0] - s[0], t[1] - s[1], (t[0] ** 2 + t[1] ** 2 - s[0] ** 2 - s[1] ** 2 - w[j] + w[i]) / 2));
     });
-  }
-  const W = waypoints.length;
-  const STEPS = 300;
-  const dense = [];
-  const pinAt = new Map(); // square index -> index into dense
-  for (let k = 0; k < W; k++) {
-    const p = (i) => waypoints[(i + W) % W];
-    if (waypoints[k].pin !== undefined) pinAt.set(waypoints[k].pin, dense.length);
-    for (let j = 0; j < STEPS; j++) dense.push(catmull(p(k - 1), p(k), p(k + 1), p(k + 2), j / STEPS));
-  }
-  dense.push(dense[0]); // close the loop back into New Year
-  pinAt.set(N, dense.length - 1);
-
-  const pins = [...pinAt.keys()].sort((a, b) => a - b);
-  if (pins[0] !== 0) throw new Error('square 0 must be pinned');
-  const squares = [];
-  const steps = new Map();
-  for (let k = 0; k < pins.length - 1; k++) {
-    const a = pins[k], b = pins[k + 1];
-    const start = pinAt.get(a), end = pinAt.get(b);
-    const walk = (step) => {
-      const at = [start];
-      for (let i = a + 1; i < b; i++) {
-        let j = at[at.length - 1];
-        const from = dense[j];
-        while (j < end && cheb(dense[j], from) < step) j++;
-        at.push(j);
-      }
-      return at;
-    };
-    let lo = 0.2, hi = 5;
-    for (let it = 0; it < 40; it++) {
-      const mid = (lo + hi) / 2;
-      const at = walk(mid);
-      const j = at[at.length - 1];
-      if (j >= end || cheb(dense[end], dense[j]) < mid) hi = mid; else lo = mid;
-    }
-    steps.set(a, lo);
-    walk(lo).forEach((j, n) => squares.push({ index: a + n, x: Math.round(dense[j].x * 1000) / 1000, y: Math.round(dense[j].y * 1000) / 1000 }));
-  }
-  if (squares.length !== N) throw new Error(`placed ${squares.length} of ${N} squares`);
-  return { squares, steps };
-}
-
-// Each section's waypoints are only a sketch: its inner waypoints are scaled about their centre (the two pinned
-// ends stay put) until the section's 14 tiles sit STEP apart, so editing a shape never needs hand-measuring.
-const STEP = 1.1;
-let route = ROUTE.map((g) => ({ ...g, pts: g.pts.map((p) => [...p]) }));
-for (let it = 0; it < 12; it++) {
-  const { steps } = place(route);
-  route = route.map((g) => {
-    if (g.to === undefined) return g;
-    const f = (STEP / steps.get(g.at)) ** 0.8;
-    const cx = g.pts.reduce((t, p) => t + p[0], 0) / g.pts.length, cy = g.pts.reduce((t, p) => t + p[1], 0) / g.pts.length;
-    const last = g.pts.length - 1;
-    return { ...g, pts: g.pts.map(([x, y], i) => (i === 0 || i === last ? [x, y] : [cx + (x - cx) * f, cy + (y - cy) * f])) };
+    return parts;
   });
 }
-const { squares, steps } = place(route);
-console.log('chord step per span:', [...steps].map(([a, st]) => `${a}: ${st.toFixed(2)}`).join(', '));
+const mainPart = (parts, s) => parts.find((q) => inside(s, q)) ?? parts.reduce((a, b) => (Math.abs(area(b)) > Math.abs(area(a)) ? b : a), parts[0] ?? []);
+const voronoi = (piece, seeds, w) => voronoiParts(piece, seeds, w).map((parts, i) => mainPart(parts, seeds[i]));
 
-// ---------- checks (also asserted in tests/layout.test.ts) ----------
-
-const problems = [];
-const gap = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-for (let i = 0; i < N; i++) {
-  const a = squares[i];
-  if (a.x < 0.5 || a.y < 0.5 || a.x > WIDTH - 0.5 || a.y > HEIGHT - 0.5) problems.push(`square ${i} outside the map`);
-  for (let j = i + 1; j < N; j++) if (gap(a, squares[j]) < 1.04) problems.push(`squares ${i} and ${j} overlap (${gap(a, squares[j]).toFixed(2)})`);
-  const b = squares[(i + 1) % N];
-  const d = Math.hypot(a.x - b.x, a.y - b.y);
-  if (d > 1.6) problems.push(`squares ${i} -> ${(i + 1) % N} too far apart (${d.toFixed(2)})`);
-  const t = TITLE;
-  if (a.x + 0.5 > t.x && a.x - 0.5 < t.x + t.w && a.y + 0.5 > t.y && a.y - 0.5 < t.y + t.h) problems.push(`square ${i} under the title`);
+/**
+ * Where a coast curves back, a Voronoi cell can fall apart into a main part (round its seed) and a stray piece
+ * across a bay. Each stray piece is split among the other seeds and merged into the parcels it touches.
+ */
+function partition(piece, seeds, w) {
+  const parts = voronoiParts(piece, seeds, w);
+  const cells = parts.map((p, i) => mainPart(p, seeds[i]));
+  let strays = parts.flatMap((p, i) => p.filter((q) => q !== cells[i]).map((q) => ({ poly: q, not: i })));
+  for (let round = 0; round < 6 && strays.length; round++) {
+    const left = [];
+    for (const st of strays) {
+      const others = seeds.map((s, k) => k).filter((k) => k !== st.not);
+      const sub = voronoiParts(st.poly, others.map((k) => seeds[k]), others.map((k) => w[k]));
+      sub.forEach((ps, m) => ps.forEach((q) => {
+        const k = others[m];
+        const u = unionTouching(clockwise(cells[k]), clockwise(q));
+        if (u) cells[k] = u;
+        else left.push({ poly: q, not: st.not });
+      }));
+    }
+    strays = left;
+  }
+  if (strays.length) problems.push(`${strays.length} stray piece(s) could not be merged`);
+  return cells;
 }
+
+/**
+ * Pulls city seeds back toward their cities until every
+ * city lies inside its own parcel, at least 0.12 cells from any border with another parcel. Returns false if it gave up.
+ */
+function keepCities(piece, mine, tries) {
+  for (let t = 0; t < tries; t++) {
+    const trial = mine.map((s) => s.next ?? s.at);
+    const cells = voronoi(piece, trial, mine.map((s) => s.w));
+    const bad = mine.filter((s, k) => s.city && !(inside(s.city, cells[k]) && (edgeDist(s.city, cells[k]) > 0.12 || edgeDist(s.city, piece) < 0.13)));
+    if (!bad.length) return true;
+    for (const s of bad) {
+      s.next = [((s.next ?? s.at)[0] + s.city[0]) / 2, ((s.next ?? s.at)[1] + s.city[1]) / 2];
+    }
+  }
+  return false;
+}
+
+const regionOutlines = {};
+const parcels = new Map(); // square id -> { id, section, poly, city?: [x, y] }
+
+for (const sec of sections) {
+  const R = REGIONS[sec.id];
+  const p = proj[sec.id];
+  const pieces = R.pieces.map((piece) => {
+    const runs = [];
+    let cur = null;
+    for (const v of piece) {
+      if (typeof v === 'string') {
+        runs.push({ pts: v === 'AMUR' ? AMUR : [...AMUR].reverse(), p: proj.russia });
+        cur = null;
+      } else {
+        if (!cur) runs.push((cur = { pts: [], p }));
+        cur.pts.push(v);
+      }
+    }
+    return clockwise(projectOutline(runs));
+  });
+  regionOutlines[sec.id] = pieces.map(roundPoly);
+  regionOutlines[sec.id].forEach((pc, i) => { if (!isSimple(pc)) problems.push(`${sec.id} outline ${i} crosses itself`); });
+
+  const seeds = [
+    ...sec.cities.map((c) => ({ id: c.id, city: p([c.lon, c.lat]) })),
+    ...SPECIALS.map((k) => ({ id: `${k}-${sec.id}`, start: p(R.seeds[k]), pinned: (R.pinned ?? []).includes(k) })),
+  ];
+  if (seeds.length !== 14) throw new Error(`${sec.id}: ${seeds.length} seeds`);
+  for (const s of seeds) {
+    s.at = [...(s.city ?? s.start)];
+    s.w = 0;
+    s.piece = regionOutlines[sec.id].findIndex((pc) => inside(s.at, pc));
+    if (s.piece < 0) problems.push(`${s.id}: start point outside ${sec.id}`), (s.piece = 0);
+  }
+  regionOutlines[sec.id].forEach((piece, pi) => {
+    const mine = seeds.filter((s) => s.piece === pi);
+    if (!mine.length) return problems.push(`${sec.id} piece ${pi} has no seed`);
+    for (let it = 0; it < 80; it++) {
+      const cells = voronoi(piece, mine.map((s) => s.at), mine.map((s) => s.w));
+      mine.forEach((s, k) => {
+        if (cells[k].length < 3) return;
+        const c = centroid(cells[k]);
+        if (!s.city) { if (!s.pinned) s.at = c; return; }
+        const off = [c[0] - s.city[0], c[1] - s.city[1]];
+        const l = Math.hypot(off[0], off[1]);
+        const f = l > CITY_SLACK ? CITY_SLACK / l : 1;
+        s.next = [s.city[0] + off[0] * f, s.city[1] + off[1] * f];
+      });
+      // A city seed may only move while its city stays inside its own parcel.
+      keepCities(piece, mine, 12);
+      mine.forEach((s) => { if (s.next) s.at = s.next; delete s.next; });
+    }
+    if (!keepCities(piece, mine, 60)) problems.push(`${sec.id}: a city fell outside its parcel`);
+    mine.forEach((s) => { if (s.next) s.at = s.next; delete s.next; });
+    const cells = partition(piece, mine.map((s) => s.at), mine.map((s) => s.w));
+    mine.forEach((s, k) => parcels.set(s.id, { id: s.id, section: sec.id, piece: pi, poly: roundPoly(cells[k]), city: s.city && s.city.map(round) }));
+  });
+}
+
+// ---------- backdrop ----------
+
+const backdrop = BACKDROP.map((b) => ({
+  name: b.name,
+  poly: roundPoly(clockwise(projectOutline((b.runs ?? [{ pts: b.pts, proj: b.proj }]).map((r) => ({ pts: r.pts, p: projOf(r.proj) }))))),
+}));
+
+// ---------- sea crossings ----------
+
+const titleBox = [[TITLE.x, TITLE.y], [TITLE.x + TITLE.w, TITLE.y], [TITLE.x + TITLE.w, TITLE.y + TITLE.h], [TITLE.x, TITLE.y + TITLE.h]];
+const border = [[0.25, 0.25], [WIDTH - 0.25, 0.25], [WIDTH - 0.25, HEIGHT - 0.25], [0.25, HEIGHT - 0.25]];
+const land = [...Object.values(regionOutlines).flat(), ...backdrop.map((b) => b.poly)];
+const zones = []; // { poly } per crossing half, in board order
+const RAYS = 90;
+CROSSINGS.forEach((cr, k) => {
+  const obstacles = [...land, titleBox, border, ...zones.map((z) => z.poly)];
+  if (obstacles.slice(0, land.length).some((poly) => inside(cr.at, poly))) problems.push(`${cr.name}: centre on land`);
+  const rand = rng(cr.seed * 7919);
+  const waves = [1, 2, 3].map((f) => ({ f: f + 1, a: (0.16 / f) * (0.6 + rand()), ph: rand() * Math.PI * 2 }));
+  const rot = (cr.rot * Math.PI) / 180;
+  const r = [];
+  for (let i = 0; i < RAYS; i++) {
+    const th = (i / RAYS) * Math.PI * 2;
+    const u = [Math.cos(th), Math.sin(th)];
+    const lx = Math.cos(th - rot), ly = Math.sin(th - rot);
+    const ell = 1 / Math.hypot(lx / cr.rx, ly / cr.ry);
+    const wob = 1 + waves.reduce((t, w) => t + w.a * Math.sin(w.f * th + w.ph), 0);
+    r.push(Math.min(ell * wob, rayHit(cr.at, u, obstacles) - 0.14));
+  }
+  // Erode then average: never larger than the clearance, and no spikes where a ray slips past a cape.
+  const W = 3;
+  const eroded = r.map((_, i) => Math.min(...Array.from({ length: 2 * W + 1 }, (_, j) => r[(i + j - W + RAYS) % RAYS])));
+  const smooth = eroded.map((_, i) => (eroded[(i - 1 + RAYS) % RAYS] + eroded[i] + eroded[(i + 1) % RAYS]) / 3);
+  const blob = smooth.map((l, i) => [cr.at[0] + l * Math.cos((i / RAYS) * Math.PI * 2), cr.at[1] + l * Math.sin((i / RAYS) * Math.PI * 2)]);
+  if (cr.squares === 1) return void zones.push({ poly: roundPoly(clockwise(blob)), crossing: cr.name });
+  // Split across the long axis into two halves of equal area.
+  const u = [Math.cos(rot), Math.sin(rot)];
+  const c0 = u[0] * cr.at[0] + u[1] * cr.at[1];
+  let lo = -cr.rx, hi = cr.rx;
+  for (let it = 0; it < 40; it++) {
+    const t = (lo + hi) / 2;
+    if (Math.abs(area(clipHalf(blob, u[0], u[1], c0 + t))) < Math.abs(area(blob)) / 2) lo = t; else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  let halves = [clipHalf(blob, u[0], u[1], c0 + t), clipHalf(blob, -u[0], -u[1], -(c0 + t))];
+  const prev = regionOutlines[sections[Math.min(k, sections.length - 1)].id];
+  const dPrev = (poly) => Math.min(...prev.map((pc) => edgeDist(centroid(poly), pc)));
+  if (dPrev(halves[1]) < dPrev(halves[0])) halves = [halves[1], halves[0]];
+  for (const h of halves) zones.push({ poly: roundPoly(clockwise(h)), crossing: cr.name });
+});
+
+// ---------- order ----------
+
+const near = (a, b) => polyDist(a, b);
+function sharesBorder(a, b) {
+  const on = a.filter((p) => edgeDist(p, b) < 1e-3);
+  return on.length >= 2 && Math.max(...on.flatMap((p) => on.map((q) => dist(p, q)))) > 0.05;
+}
+
+const order = [];
+let airportNo = 0, highwayNo = 0, taxNo = 0;
+const zoneIds = [];
+GAPS.forEach((g) => g.forEach((kind) => {
+  if (kind === 'airport') zoneIds.push(`airport-${++airportNo}`);
+  if (kind === 'highway') zoneIds.push(`highway-${++highwayNo}`);
+  if (kind === 'tax') zoneIds.push(`tax-${++taxNo}`);
+  if (kind === 'newYear') zoneIds.push('new-year');
+}));
+const zoneById = new Map(zoneIds.map((id, i) => [id, zones[i]]));
+const adjacency = new Map();
+
+sections.forEach((sec, k) => {
+  const ids = [...parcels.values()].filter((q) => q.section === sec.id).map((q) => q.id);
+  const P = ids.map((id) => parcels.get(id));
+  for (const q of P) q.label = pole(q.poly);
+  const before = k === 0 ? zones[zones.length - 1] : zones[2 * k - 1];
+  const after = zones[2 * k];
+  const pick = (zone, not) => {
+    const zc = pole(zone.poly);
+    return P.map((q, i) => ({ i, d: near(q.poly, zone.poly) + 0.01 * Math.hypot(q.label.x - zc.x, q.label.y - zc.y) })).filter((x) => x.i !== not).sort((a, b) => a.d - b.d)[0].i;
+  };
+  const entry = pick(before, -1);
+  const exit = pick(after, entry);
+  const adj = P.map((a, i) => P.map((b, j) => i !== j && (a.piece === b.piece ? sharesBorder(a.poly, b.poly) || sharesBorder(b.poly, a.poly) : near(a.poly, b.poly) < 1.0)));
+  P.forEach((a, i) => adjacency.set(a.id, P.filter((_, j) => adj[i][j]).map((b) => b.id)));
+  const cd = (i, j) => Math.hypot(P[i].label.x - P[j].label.x, P[i].label.y - P[j].label.y);
+  const cost = (i, j) => (adj[i][j] ? cd(i, j) : 100 + cd(i, j));
+  // Exact shortest Hamiltonian path entry -> exit over 14 parcels (bitmask DP).
+  const n = P.length, FULL = (1 << n) - 1;
+  const dp = Array.from({ length: 1 << n }, () => new Float64Array(n).fill(Infinity));
+  const from = Array.from({ length: 1 << n }, () => new Int8Array(n).fill(-1));
+  dp[1 << entry][entry] = 0;
+  for (let m = 0; m <= FULL; m++) {
+    if (!(m & (1 << entry))) continue;
+    for (let v = 0; v < n; v++) {
+      const cur = dp[m][v];
+      if (cur === Infinity || v === exit && m !== FULL) continue;
+      for (let w = 0; w < n; w++) {
+        if (m & (1 << w)) continue;
+        const nm = m | (1 << w), c = cur + cost(v, w);
+        if (c < dp[nm][w]) { dp[nm][w] = c; from[nm][w] = v; }
+      }
+    }
+  }
+  const path = [];
+  for (let m = FULL, v = exit; v >= 0; ) {
+    path.unshift(v);
+    const u = from[m][v];
+    m &= ~(1 << v);
+    v = u;
+  }
+  if (path.length !== n || path[0] !== entry) throw new Error(`${sec.id}: no path`);
+  const jumps = path.slice(1).filter((v, i) => !adj[path[i]][v]).length;
+  if (jumps) console.log(`${sec.id}: ${jumps} step(s) between parcels that do not touch`);
+  order.push(...path.map((i) => P[i].id));
+  order.push(...zoneIds.slice(2 * k, 2 * k + 2));
+});
+order.unshift(order.pop()); // New Year is square 0
+
+// ---------- checks ----------
+
+const squares = order.map((id, index) => {
+  const q = parcels.get(id);
+  if (q) return { index, id, kind: 'land', section: q.section, poly: q.poly, label: q.label, ...(q.city ? { city: q.city } : {}) };
+  const z = zoneById.get(id);
+  return { index, id, kind: 'sea', sea: z.crossing, poly: z.poly, label: pole(z.poly) };
+});
+for (const s of squares) {
+  s.label = { x: round(s.label.x), y: round(s.label.y), r: round(s.label.r) };
+  if (!isSimple(s.poly)) problems.push(`${s.id}: parcel is not a simple polygon`);
+  if (s.label.r < MIN_RADIUS) problems.push(`${s.id}: too small (inscribed radius ${s.label.r})`);
+  if (s.city && !inside(s.city, s.poly)) problems.push(`${s.id}: city outside its parcel`);
+  if (s.poly.some(([x, y]) => x < 0 || y < 0 || x > WIDTH || y > HEIGHT)) problems.push(`${s.id}: outside the map`);
+}
+for (const z of squares.filter((s) => s.kind === 'sea'))
+  for (const l of squares.filter((s) => s.kind === 'land')) if (polyDist(z.poly, l.poly) < 0.02) problems.push(`${z.id} touches ${l.id}`);
+
 const json = (v) => JSON.stringify(v);
 writeFileSync('data/layout.json', `{
-  "_note": "Generated by scripts/generate-layout.mjs. Do not edit by hand. Units are board cells: each square is an upright 1 x 1 tile centred on (x, y), origin top-left. continents are closed outlines, drawn as smooth curves.",
+  "_note": "Generated by scripts/generate-layout.mjs from scripts/world.mjs and the city lat/lon in data/sections.json. Do not edit by hand. Units are map cells, origin top-left, y down. Every square is a territory: poly is its outline (a simple polygon); label is its pole of inaccessibility (x, y) and the radius r of the largest circle that fits inside; city is the projected real location of a city. kind land = a parcel of a playable region, sea = a sea zone on a crossing. regions are the playable coastlines (one outline per island), backdrop is the non-playable land. Square order here is the board order (data/board.json copies it).",
   "width": ${WIDTH},
   "height": ${HEIGHT},
+  "minRadius": ${MIN_RADIUS},
   "title": ${json(TITLE)},
   "squares": [
 ${squares.map((q) => `    ${json(q)}`).join(',\n')}
   ],
-  "continents": {
-${Object.entries(CONTINENTS).map(([k, v]) => `    ${json(k)}: ${json(v)}`).join(',\n')}
-  }
+  "adjacency": ${json(Object.fromEntries(adjacency))},
+  "regions": {
+${Object.entries(regionOutlines).map(([k, v]) => `    ${json(k)}: ${json(v)}`).join(',\n')}
+  },
+  "backdrop": [
+${backdrop.map((b) => `    ${json(b)}`).join(',\n')}
+  ],
+  "oceans": ${json(OCEANS)},
+  "dateLine": ${json(DATE_LINE)}
 }
 `);
+const radii = squares.map((s) => s.label.r);
+console.log(`layout.json: ${WIDTH} x ${HEIGHT} cells, inscribed radius ${Math.min(...radii).toFixed(2)}-${Math.max(...radii).toFixed(2)}, ${problems.length} problems`);
 if (problems.length) {
   console.error(problems.join('\n'));
   process.exitCode = 1;
 }
-console.log(`layout.json: ${WIDTH} x ${HEIGHT} cells, ${problems.length} problems`);

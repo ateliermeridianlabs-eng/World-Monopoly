@@ -1,41 +1,37 @@
-// Builds data/board.json (the full, explicit square list) from data/sections.json and data/rules.json.
-// Run: npm run board
+// Builds data/board.json (the full, explicit square list) from data/sections.json, data/rules.json and the square
+// order in data/layout.json. Run: npm run board (generates the layout first, then this).
+//
+// The order comes from the map (scripts/generate-layout.mjs): New Year, then for each section in sections.json
+// order its 14 squares (8 cities, 4 utility meters, World Event, Disaster) walked through the region from the
+// side nearest the previous crossing to the side nearest the next, then the crossing's sea squares (an airport
+// and a highway or tax office; the last crossing is a single highway back to New Year).
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const sections = JSON.parse(readFileSync('data/sections.json', 'utf8')).sections;
 const rules = JSON.parse(readFileSync('data/rules.json', 'utf8'));
+const layout = JSON.parse(readFileSync('data/layout.json', 'utf8'));
 
-// Inside every section: 8 cities (c0..c7, cheapest first), 4 utility meters, 1 World Event, 1 Disaster.
-const SECTION_PATTERN = ['c0', 'c1', 'water', 'c2', 'event', 'c3', 'gas', 'c4', 'c5', 'electricity', 'disaster', 'c6', 'wifi', 'c7'];
-// Squares in the gap after each section. The last gap runs back into New Year.
-const GAPS = [
-  ['airport', 'highway'], ['airport', 'tax'], ['airport', 'highway'], ['airport', 'tax'],
-  ['airport', 'highway'], ['airport', 'tax'], ['airport', 'highway'], ['airport', 'tax'],
-  ['highway'],
-];
+const cities = new Map(sections.flatMap((s) => s.cities.map((c) => [c.id, { city: c, section: s }])));
+const sectionById = new Map(sections.map((s) => [s.id, s]));
 
-const squares = [{ type: 'newYear', id: 'new-year', name: 'New Year' }];
-let airportNo = 0, highwayNo = 0, taxNo = 0;
-
-sections.forEach((section, i) => {
-  for (const slot of SECTION_PATTERN) {
-    if (slot.startsWith('c')) {
-      const city = section.cities[Number(slot.slice(1))];
-      squares.push({ type: 'city', id: city.id, name: city.name, section: section.id, price: city.price, image: city.image });
-    } else if (slot === 'event') {
-      squares.push({ type: 'event', id: `event-${section.id}`, name: 'World Event', section: section.id });
-    } else if (slot === 'disaster') {
-      squares.push({ type: 'disaster', id: `disaster-${section.id}`, name: 'Disaster', section: section.id });
-    } else {
-      const kind = rules.utilities.kinds.find((k) => k.id === slot);
-      squares.push({ type: 'utility', id: `${slot}-${section.id}`, name: `${section.name} ${kind.name}`, section: section.id, utility: slot, price: rules.utilities.price });
-    }
+const squares = layout.squares.map(({ id }) => {
+  if (id === 'new-year') return { type: 'newYear', id, name: 'New Year' };
+  if (cities.has(id)) {
+    const { city, section } = cities.get(id);
+    return { type: 'city', id, name: city.name, section: section.id, price: city.price, image: city.image };
   }
-  for (const gap of GAPS[i]) {
-    if (gap === 'airport') squares.push({ type: 'airport', id: `airport-${++airportNo}`, name: `Airport ${airportNo}`, price: rules.airports.price });
-    if (gap === 'highway') squares.push({ type: 'highway', id: `highway-${++highwayNo}`, name: `Highway ${highwayNo}` });
-    if (gap === 'tax') squares.push({ type: 'tax', id: `tax-${++taxNo}`, name: 'Tax Office' });
-  }
+  const [kind, ...rest] = id.split('-');
+  const tail = rest.join('-');
+  if (kind === 'airport') return { type: 'airport', id, name: `Airport ${tail}`, price: rules.airports.price };
+  if (kind === 'highway') return { type: 'highway', id, name: `Highway ${tail}` };
+  if (kind === 'tax') return { type: 'tax', id, name: 'Tax Office' };
+  const section = sectionById.get(tail);
+  if (!section) throw new Error(`unknown square ${id}`);
+  if (kind === 'event') return { type: 'event', id, name: 'World Event', section: tail };
+  if (kind === 'disaster') return { type: 'disaster', id, name: 'Disaster', section: tail };
+  const utility = rules.utilities.kinds.find((k) => k.id === kind);
+  if (!utility) throw new Error(`unknown square ${id}`);
+  return { type: 'utility', id, name: `${section.name} ${utility.name}`, section: tail, utility: kind, price: rules.utilities.price };
 });
 
 squares.forEach((s, index) => {
@@ -45,8 +41,13 @@ squares.forEach((s, index) => {
 
 const ids = new Set(squares.map((s) => s.id));
 if (ids.size !== squares.length) throw new Error('duplicate square id');
+if (squares[0].type !== 'newYear') throw new Error('square 0 must be New Year');
 if (squares.length % rules.salary.checkpointEvery !== 0) throw new Error(`board size ${squares.length} is not a multiple of checkpointEvery`);
+for (const s of sections) {
+  const at = squares.filter((q) => q.section === s.id).map((q) => q.index);
+  if (at.length !== 14 || at[13] - at[0] !== 13) throw new Error(`${s.id}: its 14 squares must be consecutive`);
+}
 
 const ordered = squares.map(({ index, id, type, name, checkpoint, ...rest }) => ({ index, id, type, name, checkpoint, ...rest }));
-writeFileSync('data/board.json', JSON.stringify({ _note: 'Generated by scripts/generate-board.mjs. Do not edit by hand.', size: ordered.length, squares: ordered }, null, 2) + '\n');
+writeFileSync('data/board.json', JSON.stringify({ _note: 'Generated by scripts/generate-board.mjs from data/sections.json, data/rules.json and the square order in data/layout.json (inside a section the order follows the map). Do not edit by hand.', size: ordered.length, squares: ordered }, null, 2) + '\n');
 console.log(`board.json: ${ordered.length} squares`);

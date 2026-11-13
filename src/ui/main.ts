@@ -24,7 +24,7 @@ function loadSave(): GameState | null {
   try {
     const raw = store.get(SAVE_KEY);
     const s = raw ? (JSON.parse(raw) as GameState) : null;
-    return s && s.version === 2 && s.phase !== 'gameOver' ? s : null;
+    return s && s.version === 3 && s.phase !== 'gameOver' ? s : null;
   } catch {
     return null;
   }

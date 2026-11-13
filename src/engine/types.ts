@@ -98,8 +98,8 @@ export interface LastEvent {
 }
 
 export interface GameState {
-  /** Bumped when saved games become incompatible (2: board reordered into a trip around the world). Older saves are ignored. */
-  version: 2;
+  /** Bumped when saved games become incompatible (2: board reordered into a trip around the world; 3: squares became map territories, order inside a section follows the map). Older saves are ignored. */
+  version: 3;
   players: Player[];
   /** square index -> player id */
   owners: Record<number, number>;

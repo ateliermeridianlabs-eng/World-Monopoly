@@ -9,7 +9,7 @@ import {
 } from '../engine/game';
 import type { GameState, TradeOffer } from '../engine/types';
 import type { Intent, PendingTrade, Seat, SessionStatus } from '../net';
-import { MAP, boardPosition, mapBackdropSvg, routeArrowsSvg, tileArt, tileIcon } from './tiles';
+import { MAP, boardPosition, mapOverSvg, mapUnderSvg, territoryKind, territoryPath, tileArt, tileIcon } from './tiles';
 import { store } from './store';
 
 export const app = document.getElementById('app')!;
@@ -203,56 +203,85 @@ function mountGame() {
 
   const board = document.getElementById('board')!;
   const t = MAP.title;
+  // Every square is a territory on the map: an SVG path (the clickable, focusable square) plus an HTML label
+  // at its pole of inaccessibility (art, name, price, buildings, tokens), which lets clicks through.
   board.innerHTML =
-    `<div class="map" style="--map-w:${MAP.width};--map-h:${MAP.height}">${mapBackdropSvg()}` +
+    `<div class="map" style="--map-w:${MAP.width};--map-h:${MAP.height}">
+      <svg class="map-svg" viewBox="0 0 ${MAP.width} ${MAP.height}" preserveAspectRatio="none">
+        ${mapUnderSvg()}
+        <g class="territories">${BOARD.map((sq) => {
+          const section = sq.section ? sectionById.get(sq.section)! : null;
+          const label = `${sq.name}${section && sq.type !== 'utility' ? `, ${section.name}` : ''}${sq.price ? `, ${money(sq.price)}` : ''}`;
+          return `<path class="tile tile-${sq.type} ${territoryKind(sq.index)}" data-tile="${sq.index}" d="${territoryPath(sq.index)}" role="button" tabindex="0" aria-label="${esc(label)}"${section ? ` style="--section:${section.color}"` : ''}><title>${esc(label)}</title></path>`;
+        }).join('')}</g>
+        <defs>${BOARD.map((sq) => `<clipPath id="tc${sq.index}"><path d="${territoryPath(sq.index)}"/></clipPath>`).join('')}</defs>
+        <g class="owner-rims"></g>
+        ${mapOverSvg()}
+        <path class="hl hl-current"/><path class="hl hl-selected"/><path class="hl hl-focus"/>
+      </svg>` +
     BOARD.map((sq) => {
-      const { x, y } = boardPosition(sq.index);
+      const { x, y, r } = boardPosition(sq.index);
       const section = sq.section ? sectionById.get(sq.section)! : null;
       return `
-        <button class="tile tile-${sq.type}" data-tile="${sq.index}" style="--x:${x};--y:${y};${section ? `--section:${section.color}` : ''}" title="${esc(sq.name)}">
-          ${section ? '<span class="band"></span>' : ''}
-          <span class="art">${tileArt(sq)}</span>
-          <span class="label">${esc(shortName(sq))}</span>
+        <div class="parcel-label label-${sq.type} ${territoryKind(sq.index)}" data-label="${sq.index}" style="--x:${x};--y:${y};--r:${r};${section ? `--section:${section.color}` : ''}" aria-hidden="true">
+          <span class="art">${tileArt(sq)}<span class="levels"></span></span>
+          <span class="name">${esc(shortName(sq))}</span>
           ${sq.price ? `<span class="price">${money(sq.price)}</span>` : ''}
           ${sq.checkpoint ? '<span class="checkpoint" title="Salary checkpoint">⭐</span>' : ''}
-          <span class="levels"></span>
           <span class="tokens"></span>
-        </button>`;
+        </div>`;
     }).join('') +
     `<div class="board-center" style="--tx:${t.x};--ty:${t.y};--tw:${t.w};--th:${t.h}">
       <h2>World Monopoly</h2>
       <div class="legend">${[...sectionById.values()].map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>
-      <p class="muted">Tap any square for details.</p>
-    </div>${routeArrowsSvg()}</div>`;
+      <p class="muted">Tap any territory for details.</p>
+    </div></div>`;
 
-  board.addEventListener('click', (e) => {
-    const tile = (e.target as HTMLElement).closest<HTMLElement>('[data-tile]');
+  const choose = (el: Element | null) => {
+    const tile = el?.closest<SVGElement>('[data-tile]');
     if (!tile) return;
     selected = Number(tile.dataset.tile);
     update(false);
+  };
+  board.addEventListener('click', (e) => choose(e.target as Element));
+  board.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target as Element).matches('[data-tile]')) {
+      e.preventDefault();
+      choose(e.target as Element);
+    }
   });
+  const focusRing = board.querySelector('.hl-focus')!;
+  board.addEventListener('focusin', (e) => {
+    const tile = (e.target as Element).closest<SVGElement>('[data-tile]');
+    focusRing.setAttribute('d', tile && tile.matches(':focus-visible') ? territoryPath(Number(tile.dataset.tile)) : '');
+  });
+  board.addEventListener('focusout', () => focusRing.setAttribute('d', ''));
 
   let cell = Number(localStorageGet('world-monopoly-cell') ?? 56);
   const applyZoom = () => {
     document.documentElement.style.setProperty('--cell', `${cell}px`);
     board.classList.toggle('compact', cell < 44);
+    board.classList.toggle('tiny', cell < 12);
     localStorageSet('world-monopoly-cell', String(cell));
   };
   applyZoom();
   app.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach((b) =>
     b.addEventListener('click', () => {
-      cell = Math.min(110, Math.max(16, cell + Number(b.dataset.zoom) * 12));
+      cell = Math.min(110, Math.max(Math.min(MIN_CELL, cell), cell + Number(b.dataset.zoom) * 12));
       applyZoom();
       follow();
     }));
   app.querySelector('[data-fit]')!.addEventListener('click', () => {
     const scroller = document.querySelector<HTMLElement>('.board-scroll')!;
     // 32px horizontal and 72px vertical padding around the map (see .board in styles.css)
-    cell = Math.max(16, Math.floor(Math.min((scroller.clientWidth - 32) / MAP.width, (scroller.clientHeight - 72) / MAP.height)));
+    cell = Math.max(4, Math.floor(Math.min((scroller.clientWidth - 32) / MAP.width, (scroller.clientHeight - 72) / MAP.height)));
     applyZoom();
   });
   app.querySelector('[data-follow]')!.addEventListener('click', follow);
 }
+
+/** Smallest zoom-out step (px per map cell); Fit may go smaller to show the whole map on a phone. */
+const MIN_CELL = 10;
 
 function shortName(sq: { type: string; name: string; utility?: string }) {
   if (sq.type === 'utility') return RULES.utilities.kinds.find((k) => k.id === sq.utility)!.name;
@@ -304,20 +333,30 @@ export function update(scroll = true) {
 
 function renderBoardState(s: GameState) {
   const cur = currentPlayer(s).position;
-  document.querySelectorAll<HTMLElement>('[data-tile]').forEach((tile) => {
+  document.querySelectorAll<SVGElement>('[data-tile]').forEach((tile) => {
     const i = Number(tile.dataset.tile);
     const owner = ownerOf(s, i);
-    tile.style.setProperty('--owner', owner ? owner.color : 'transparent');
-    tile.classList.toggle('owned', !!owner);
-    tile.classList.toggle('selected', i === selected);
-    tile.classList.toggle('current', i === cur);
+    const label = document.querySelector<HTMLElement>(`[data-label="${i}"]`)!;
+    for (const el of [tile, label]) {
+      el.style.setProperty('--owner', owner ? owner.color : 'transparent');
+      el.classList.toggle('owned', !!owner);
+      el.classList.toggle('selected', i === selected);
+      el.classList.toggle('current', i === cur);
+    }
     const level = levelOf(s, i);
-    tile.querySelector('.levels')!.innerHTML = level === HOTEL ? '<b class="hotel">H</b>' : '<b class="house"></b>'.repeat(level);
-    tile.querySelector('.tokens')!.innerHTML = s.players
+    label.querySelector('.levels')!.innerHTML = level === HOTEL ? '<b class="hotel">H</b>' : '<b class="house"></b>'.repeat(level);
+    label.querySelector('.tokens')!.innerHTML = s.players
       .filter((p) => !p.bankrupt && p.position === i)
       .map((p) => `<i class="token" style="background:${esc(p.color)}" title="${esc(p.name)}"></i>`)
       .join('');
   });
+  // A band in the owner's colour just inside each owned territory's border (clipped to the territory).
+  const rims = document.querySelector('.owner-rims');
+  if (rims) rims.innerHTML = Object.entries(s.owners)
+    .map(([i]) => `<path d="${territoryPath(Number(i))}" clip-path="url(#tc${i})" stroke="${esc(ownerOf(s, Number(i))?.color ?? 'transparent')}"/>`)
+    .join('');
+  document.querySelector('.hl-current')?.setAttribute('d', territoryPath(cur));
+  document.querySelector('.hl-selected')?.setAttribute('d', selected === null ? '' : territoryPath(selected));
 }
 
 function renderBanner() {

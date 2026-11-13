@@ -9,8 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "board": "node scripts/generate-board.mjs && node scripts/generate-layout.mjs",
-    "layout": "node scripts/generate-layout.mjs",
+    "board": "node scripts/generate-layout.mjs && node scripts/generate-board.mjs",
+    "layout": "npm run board",
     "simulate": "tsx scripts/simulate.ts",
     "e2e": "node scripts/e2e.mjs"
   },

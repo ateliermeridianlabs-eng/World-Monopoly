@@ -173,7 +173,7 @@ describe('protocol', () => {
     expect(parseMessage({ t: 'snapshot', snapshot: legacy })).toBeNull();
     const lobby = { ...JSON.parse(JSON.stringify(createTable('0123456789abcdef', 'Hana'))), pendingTrades: [{ id: 1, offer }] };
     expect(parseMessage({ t: 'snapshot', snapshot: lobby })).toBeNull();
-    expect(PROTOCOL_VERSION).toBe(2);
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 
   it('returns clean copies without extra fields', () => {

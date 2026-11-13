@@ -40,11 +40,11 @@ describe('rent', () => {
   it('adds 10% per extra square owned in the section, capped by role', () => {
     const s = twoPlayers();
     const cities = sectionCities('usa');
-    const ny = cities[7];
+    const ny = BOARD.find((q) => q.id === 'new-york')!.index;
     give(s, 0, [ny]);
     const base = cityRent(s, ny);
     expect(base).toBe(Math.round(600 * 0.08));
-    give(s, 0, cities.slice(0, 3));
+    give(s, 0, cities.filter((c) => c !== ny).slice(0, 3));
     expect(cityRent(s, ny)).toBe(Math.round(base * 1.3));
     give(s, 0, [...cities, ...sectionUtilities('usa')]);
     expect(cityRent(s, ny)).toBe(Math.round(base * 2.1));

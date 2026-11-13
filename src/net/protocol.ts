@@ -8,7 +8,8 @@ import type { GameState, TradeOffer } from '../engine/types';
 
 /** Bumped when the wire format changes; a host rejects guests with another version. */
 /** 2: `Snapshot.pendingTrade` became the list `pendingTrades`; trades are allowed at any time. */
-export const PROTOCOL_VERSION = 2;
+/** 3: square indices changed (squares are map territories; the order inside a section follows the map). */
+export const PROTOCOL_VERSION = 3;
 /** Same cap as the name inputs in the hot-seat UI. */
 export const NAME_MAX = 16;
 
@@ -194,7 +195,7 @@ const isRecordOf = (v: unknown, valueOk: (x: unknown) => boolean) =>
 
 /** Structural check of a GameState, so a hostile "host" cannot crash a guest's renderer. */
 export function validGameState(v: unknown, playerCount: number): v is GameState {
-  if (!isObj(v) || v.version !== 2) return false;
+  if (!isObj(v) || v.version !== 3) return false;
   const players = v.players;
   if (!Array.isArray(players) || players.length !== playerCount) return false;
   const playersOk = players.every((p, i) =>
