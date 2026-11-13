@@ -27,7 +27,8 @@ export interface RoomView {
   hostId: string;
   seats: Seat[];
   status: SessionStatus;
-  pendingTrade: PendingTrade | null;
+  /** Open human-to-human offers (any proposer, any target), oldest first. */
+  pendingTrades: PendingTrade[];
   /** The net layer lets only the host's own seat end the game. */
   canFinish: boolean;
   /** Other people in the room, for the indicator. */
@@ -42,9 +43,9 @@ export interface Controller {
   /** True when this device may act for the current player (not a bot, game still running, connected). */
   canAct(): boolean;
   /**
-   * Do something as the current player. Hot-seat: runs the engine now and throws on a rule error; there
-   * `proposeTrade` means "resolve it now" (a bot decides, a human has already confirmed). Online: sends the
-   * intent; refusals arrive later through notify().
+   * Do something as the current player (trades: as `offer.from`, any time). Hot-seat: runs the engine now and
+   * throws on a rule error; there `proposeTrade` means "resolve it now" (a bot decides, a human has already
+   * confirmed). Online: sends the intent; refusals arrive later through notify().
    */
   perform(intent: Intent): void;
   /** Online host only. */
@@ -71,6 +72,9 @@ let lastTurnKey: string | null = null;
 type ModalKind = 'builder' | 'prompt';
 let modalKind: ModalKind | null = null;
 let promptId: number | null = null;
+let promptTotal = 0;
+/** Offers this device already answered and the host has not yet dropped, so the prompt does not flash back. Cleared on a refusal. */
+const answered = new Set<number>();
 
 // ---------- small helpers shared with the lobby ----------
 
@@ -148,6 +152,7 @@ export function showGame(controller: Controller) {
   lastTurnKey = null;
   modalKind = null;
   promptId = null;
+  answered.clear();
   const me = room?.selfSeat != null ? s?.players[room.selfSeat] : undefined;
   selected = me ? me.position : s ? currentPlayer(s).position : null;
   mountGame();
@@ -163,6 +168,7 @@ export function detachGame() {
   showLinkInput = false;
   modalKind = null;
   promptId = null;
+  answered.clear();
 }
 
 /** Select a tile (hot-seat bots move the selection along with them). */
@@ -173,6 +179,7 @@ export function select(index: number | null) {
 /** Shows a message in the panel's toast slot (e.g. a refused online action). */
 export function notify(message: string) {
   toast = message;
+  answered.clear(); // a refused answer must bring its offer back
   followBase = null;
   update(false);
 }
@@ -325,11 +332,9 @@ function renderPanel(s: GameState) {
   const room = c.room();
   const p = currentPlayer(s);
   const over = s.phase === 'gameOver';
-  const pend = room?.pendingTrade ?? null;
   const can = c.canAct();
   const here = square(p.position);
   const buying = s.pendingBuy !== null ? square(s.pendingBuy) : null;
-  const waitingOnTrade = can && !!pend;
   const frozen = !!room && room.status !== 'connected' && !over;
   const spectating = !!room && room.selfSeat === null;
 
@@ -340,10 +345,6 @@ function renderPanel(s: GameState) {
       <button class="primary wide" data-act="new">New game</button>`;
   } else if (frozen) {
     actions = `<p class="muted">Paused until the host is back.</p>`;
-  } else if (waitingOnTrade) {
-    const to = s.players[pend!.offer.to];
-    actions = `<p class="muted">Waiting for ${esc(to?.name ?? 'the other player')} to answer your trade…</p>
-      <button class="wide" data-act="cancel-trade">Cancel trade</button>`;
   } else if (!can) {
     actions = p.isBot ? `<p class="muted">${esc(p.name)} is thinking…</p>` : `<p class="muted">Waiting for ${esc(p.name)}…${room?.seats[p.id]?.kind === 'human' && !room.seats[p.id].connected ? ' (away)' : ''}</p>`;
   } else if (s.phase === 'roll') {
@@ -358,10 +359,17 @@ function renderPanel(s: GameState) {
           </select>
           <button data-act="fly">✈️ Fly</button>
         </div>` : ''}
-      <div class="row">
-        <button data-act="trade">🤝 Trade</button>
-        <button class="primary" data-act="end">End turn</button>
-      </div>`;
+      <button class="primary wide" data-act="end">End turn</button>`;
+  }
+
+  // Trading is open to everyone at any time, so it lives outside the turn's action block.
+  let tradeBar = '';
+  if (!frozen && canTrade(s, room)) {
+    const mine = room?.pendingTrades.find((pt) => pt.offer.from === room.selfSeat);
+    tradeBar = mine
+      ? `<p class="muted">Waiting for ${esc(s.players[mine.offer.to]?.name ?? 'the other player')} to answer your trade…</p>
+        <button class="wide" data-act="cancel-trade">Cancel trade</button>`
+      : '<button class="wide" data-act="trade">🤝 Trade</button>';
   }
 
   const seatTags = (id: number) => {
@@ -418,7 +426,8 @@ function renderPanel(s: GameState) {
     ${s.lastEvent ? `<div class="event event-${esc(s.lastEvent.kind)}"><strong>${esc(s.lastEvent.title)}</strong><p>${esc(s.lastEvent.text)}</p></div>` : ''}
     ${toast ? `<div class="toast" role="status">${esc(toast)}</div>` : ''}
     <div class="actions">${actions}</div>
-    ${selected !== null ? detail(s, selected, can && !pend && !frozen) : ''}
+    ${tradeBar ? `<div class="trade-bar">${tradeBar}</div>` : ''}
+    ${selected !== null ? detail(s, selected, can && !frozen) : ''}
     <h3>Players</h3>
     <ul class="players">
       ${s.players.map((pl) => `
@@ -555,14 +564,24 @@ function tradeSummary(s: GameState, offer: TradeOffer) {
     for <strong>${tradeNames(offer.get)}</strong>${offer.cash < 0 ? ` + ${money(-offer.cash)}` : ''}.`;
 }
 
+/** Who may open the trade modal: online, a seated non-bankrupt human; hot-seat, anyone while a human is still in. */
+function canTrade(s: GameState, room: RoomView | null) {
+  if (s.phase === 'gameOver' || activePlayers(s).length < 2) return false;
+  if (!room) return s.players.some((p) => !p.isBot && !p.bankrupt);
+  const me = room.selfSeat;
+  return me !== null && room.status === 'connected' && room.seats[me]?.kind === 'human' && !s.players[me].bankrupt;
+}
+
 function openTrade() {
   const c = ctl!;
   const room = c.room();
   const first = c.game()!;
-  const me = currentPlayer(first);
-  const others = activePlayers(first).filter((o) => o.id !== me.id);
-  if (!others.length) return;
-  let partner = others[0].id;
+  if (!canTrade(first, room)) return;
+  // Online "me" is this device's seat. Hot-seat shares one device, so "From" is a picker (default: the current player).
+  let from = room ? room.selfSeat! : first.players.some((p) => p.id === first.current && !p.isBot && !p.bankrupt) ? first.current : first.players.find((p) => !p.isBot && !p.bankrupt)!.id;
+  const froms = room ? [] : first.players.filter((p) => !p.isBot && !p.bankrupt);
+  const partnersOf = (s: GameState) => activePlayers(s).filter((o) => o.id !== from);
+  let partner = partnersOf(first)[0].id;
   const modal = document.getElementById('modal')!;
   modalKind = 'builder';
 
@@ -575,23 +594,31 @@ function openTrade() {
   const draw = (message = '') => {
     const s = c.game();
     if (!s) return;
+    const me = s.players[from];
     const them = s.players[partner];
+    const others = partnersOf(s);
     modal.className = 'modal-root open';
     modal.innerHTML = `
       <div class="modal" role="dialog" aria-label="Trade">
         <h3>Trade</h3>
+        ${room ? '' : `<label>From <select data-from>${froms.map((o) => `<option value="${o.id}" ${o.id === from ? 'selected' : ''}>${esc(s.players[o.id].name)}</option>`).join('')}</select></label>`}
         <label>With <select data-partner>${others.map((o) => `<option value="${o.id}" ${o.id === partner ? 'selected' : ''}>${esc(s.players[o.id].name)}</option>`).join('')}</select></label>
         <div class="trade-cols">
-          <div><h4>You give</h4>${propList(s, me.id, 'give')}</div>
+          <div><h4>${room ? 'You give' : `${esc(me.name)} gives`}</h4>${propList(s, me.id, 'give')}</div>
           <div><h4>${esc(them.name)} gives</h4>${propList(s, them.id, 'get')}</div>
         </div>
-        <label>Cash <input type="number" step="10" value="0" data-cash /> <span class="small muted">positive = you pay, negative = they pay</span></label>
+        <label>Cash <input type="number" step="10" value="0" data-cash /> <span class="small muted">positive = ${room ? 'you pay' : `${esc(me.name)} pays`}, negative = they pay</span></label>
         ${message ? `<p class="toast">${esc(message)}</p>` : ''}
         <div class="row">
           <button class="ghost" data-close>Cancel</button>
           <button class="primary" data-propose>Propose</button>
         </div>
       </div>`;
+    modal.querySelector('[data-from]')?.addEventListener('change', (e) => {
+      from = Number((e.target as HTMLSelectElement).value);
+      if (partner === from) partner = partnersOf(s)[0].id;
+      draw();
+    });
     modal.querySelector('[data-partner]')!.addEventListener('change', (e) => {
       partner = Number((e.target as HTMLSelectElement).value);
       draw();
@@ -651,15 +678,16 @@ function openTrade() {
   draw();
 }
 
-/** Online: the prompt the trade's target sees, whichever screen state they are in. */
-function showPrompt(s: GameState, pt: PendingTrade) {
+/** Online: the prompt the target of an offer sees (`n` of `total` when several wait), whichever screen state they are in. */
+function showPrompt(s: GameState, pt: PendingTrade, n: number, total: number) {
   const modal = document.getElementById('modal')!;
   modalKind = 'prompt';
   promptId = pt.id;
+  promptTotal = total;
   modal.className = 'modal-root open';
   modal.innerHTML = `
     <div class="modal" role="dialog" aria-label="Trade offer">
-      <h3>Trade offer</h3>
+      <h3>Trade offer${total > 1 ? ` (${n} of ${total})` : ''}</h3>
       <p>${tradeSummary(s, pt.offer)}</p>
       <div class="row">
         <button class="ghost" data-decline>Decline</button>
@@ -668,27 +696,35 @@ function showPrompt(s: GameState, pt: PendingTrade) {
     </div>`;
   const respond = (accept: boolean) => {
     closeModal(false);
-    // If the host cannot be reached the refusal comes back through notify(), the pending trade is still
-    // there, and syncModal() shows this prompt again.
+    answered.add(pt.id);
+    // If the host refuses, notify() forgets this and syncModal() shows the offer again. Otherwise the next waiting offer comes up.
     perform({ type: 'respondTrade', tradeId: pt.id, accept });
   };
   modal.querySelector('[data-decline]')!.addEventListener('click', () => respond(false));
   modal.querySelector('[data-accept]')!.addEventListener('click', () => respond(true));
 }
 
-/** Online: keep the modal in step with the snapshot (prompt for the target; close stale modals). */
+/** Online: keep the modal in step with the snapshot (one prompt at a time for incoming offers; close stale modals). */
 function syncModal() {
   const room = ctl?.room();
   const s = ctl?.game();
   if (!ctl || !room || !s) return;
-  const pt = room.pendingTrade;
-  const toMe = !!pt && room.selfSeat !== null && pt.offer.to === room.selfSeat && s.phase !== 'gameOver';
-  if (toMe) {
-    if (modalKind !== 'prompt' || promptId !== pt!.id) showPrompt(s, pt!);
-  } else if (modalKind === 'prompt') {
+  const me = room.selfSeat;
+  for (const id of answered) if (!room.pendingTrades.some((pt) => pt.id === id)) answered.delete(id);
+  const incoming = me === null || s.phase === 'gameOver' ? [] : room.pendingTrades.filter((pt) => pt.offer.to === me && !answered.has(pt.id));
+  const shown = incoming.findIndex((pt) => pt.id === promptId);
+  if (modalKind === 'prompt') {
+    if (shown >= 0) {
+      if (incoming.length !== promptTotal) showPrompt(s, incoming[shown], shown + 1, incoming.length); // refresh the "n of m" count
+      return;
+    }
+    if (incoming.length) return showPrompt(s, incoming[0], 1, incoming.length);
     closeModal(false);
-  } else if (modalKind === 'builder' && (!ctl.canAct() || pt)) {
-    closeModal(false);
+  } else if (modalKind === 'builder') {
+    // Never swallow a trade being written; incoming offers wait until it is closed.
+    if (!canTrade(s, room) || room.pendingTrades.some((pt) => pt.offer.from === me)) closeModal(false);
+  } else if (incoming.length) {
+    showPrompt(s, incoming[0], 1, incoming.length);
   }
 }
 

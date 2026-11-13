@@ -5,7 +5,7 @@ import { botStep } from '../src/engine/bot';
 import type { GameState } from '../src/engine/types';
 import {
   applyIntent, applyLobbyOp, clientIdFromKey, convertToBot, createMemoryTransportHub, createTable, hostSession, joinSession,
-  formatRoomCode, loadHostSave, needsBotStep, newRoomCode, normalizeRoomCode, parseIntent, parseMessage, roomCodeFromHash, roomLink, setSeat,
+  PROTOCOL_VERSION, formatRoomCode, loadHostSave, needsBotStep, newRoomCode, normalizeRoomCode, parseIntent, parseMessage, roomCodeFromHash, roomLink, setSeat,
   startGame, stepBot, turnFromEnv,
 } from '../src/net';
 import type { Intent, Session, Snapshot, StorageLike } from '../src/net';
@@ -120,6 +120,12 @@ describe('protocol', () => {
       { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: [1, 1], get: [], cash: 0 } } },
       { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: Array(500).fill(1), get: [], cash: 0 } } },
       { t: 'intent', intent: { type: 'respondTrade', tradeId: 1, accept: 'yes' } },
+      { t: 'intent', intent: { type: 'respondTrade', tradeId: -1, accept: true } },
+      { t: 'intent', intent: { type: 'respondTrade', tradeId: 1.5, accept: true } },
+      { t: 'intent', intent: { type: 'respondTrade', accept: true } },
+      { t: 'intent', intent: { type: 'proposeTrade' } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: [1], get: [], cash: Number.NaN } } },
+      { t: 'intent', intent: { type: 'proposeTrade', offer: { from: -1, to: 1, give: [1], get: [], cash: 0 } } },
       { t: 'lobby', op: { op: 'role', roleId: 'king' } },
       { t: 'lobby', op: { op: 'claim', seat: 6 } },
       { t: 'lobby', op: { op: 'name', name: 'x'.repeat(40) } },
@@ -142,6 +148,32 @@ describe('protocol', () => {
       bad.game.players[0].color = color;
       expect(parseMessage({ t: 'snapshot', snapshot: bad })).toBeNull();
     }
+  });
+
+  it('validates pendingTrades in snapshots', () => {
+    const t = createTable('0123456789abcdef', 'Hana');
+    setSeat(t, 1, { kind: 'bot' });
+    startGame(t, 1);
+    const offer = { from: 0, to: 1, give: [], get: [sectionCities('usa')[0]], cash: 5 };
+    const snap = (pendingTrades: unknown) => ({ t: 'snapshot', snapshot: { ...JSON.parse(JSON.stringify(t)), pendingTrades } });
+    expect(parseMessage(snap([]))).not.toBeNull();
+    expect(parseMessage(snap([{ id: 3, offer }]))).not.toBeNull();
+    expect(parseMessage(snap([{ id: 3, offer }, { id: 4, offer: { ...offer, from: 1, to: 0 } }]))).not.toBeNull();
+    for (const bad of [
+      null, undefined, {}, [{ id: -1, offer }], [{ id: 1.5, offer }], [{ id: 1 }], [{ id: 1, offer: { ...offer, to: 5 } }],
+      [{ id: 1, offer: { ...offer, to: 0 } }],                                                  // to self
+      [{ id: 1, offer }, { id: 1, offer: { ...offer, from: 1, to: 0 } }],                       // duplicate id
+      [{ id: 1, offer }, { id: 2, offer }],                                                     // two offers from one proposer
+      [{ id: 1, offer }, { id: 2, offer: { ...offer, from: 1, to: 0 } }, { id: 3, offer }],     // more than seats
+    ]) expect(parseMessage(snap(bad))).toBeNull();
+    // The old single-offer field is not a valid snapshot any more, and the lobby cannot hold offers.
+    const legacy = JSON.parse(JSON.stringify(t));
+    delete legacy.pendingTrades;
+    legacy.pendingTrade = null;
+    expect(parseMessage({ t: 'snapshot', snapshot: legacy })).toBeNull();
+    const lobby = { ...JSON.parse(JSON.stringify(createTable('0123456789abcdef', 'Hana'))), pendingTrades: [{ id: 1, offer }] };
+    expect(parseMessage({ t: 'snapshot', snapshot: lobby })).toBeNull();
+    expect(PROTOCOL_VERSION).toBe(2);
   });
 
   it('returns clean copies without extra fields', () => {
@@ -179,98 +211,196 @@ describe('protocol', () => {
 const A = 'a'.repeat(16);
 const B = 'b'.repeat(16);
 
-/** Host A in seat 0, human B in seat 1, bot in seat 2; started, A in action phase with a city each. */
+const C = 'c'.repeat(16);
+
+/** Host A in seat 0, humans B (1) and C (2), a bot (3); started in the roll phase (A to move), with a city each (bot gets c3). */
 function tradeTable() {
   const t = createTable(A, 'Ann');
   applyLobbyOp(t, B, { op: 'claim', seat: 1 }, 'Ben');
+  t.seats.push({ kind: 'open', name: '', roleId: 'landlord', clientId: null, connected: false });
+  applyLobbyOp(t, C, { op: 'claim', seat: 2 }, 'Cy');
   t.seats.push({ kind: 'bot', name: 'Bot', roleId: 'diplomat', clientId: null, connected: true });
   expect(startGame(t, 7)).toEqual({ ok: true });
   const g = t.game!;
-  g.phase = 'action';
-  const [c0, c1, c2] = sectionCities('usa');
-  g.owners[c0] = 0;
-  g.owners[c1] = 1;
-  g.owners[c2] = 2;
-  return { t, g, c0, c1, c2 };
+  const [c0, c1, c2, c3] = sectionCities('usa');
+  [c0, c1, c2, c3].forEach((c, i) => (g.owners[c] = i));
+  return { t, g, c0, c1, c2, c3 };
 }
 
+const offerOf = (from: number, to: number, give: number[], get: number[], cash = 0): Intent => ({ type: 'proposeTrade', offer: { from, to, give, get, cash } });
+const idOf = (t: Snapshot, from: number) => t.pendingTrades.find((p) => p.offer.from === from)!.id;
+
 describe('authority: trades', () => {
-  it('proposes, freezes the proposer, and executes on the target\'s accept', () => {
-    const { t, g, c0, c1 } = tradeTable();
-    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 1, to: 0, give: [c1], get: [], cash: 0 } }).ok).toBe(false);
-    expect(applyIntent(t, 1, { type: 'proposeTrade', offer: { from: 1, to: 0, give: [c1], get: [], cash: 0 } })).toEqual({ ok: false, reason: 'It is not your turn' });
-    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c1], get: [], cash: 0 } })).toEqual({ ok: false, reason: 'Ann does not own all offered properties' });
-    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 50 } })).toEqual({ ok: true });
-    const id = t.pendingTrade!.id;
-    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [], cash: 0 } }).ok).toBe(false);
-    expect(applyIntent(t, 0, { type: 'buy' })).toEqual({ ok: false, reason: 'Waiting for Ben to answer your trade' });
+  it('lets anyone propose at any time: on another player\'s turn and before rolling', () => {
+    const { t, c0, c1, c2 } = tradeTable();
+    expect(t.game!.current).toBe(0);
+    expect(t.game!.phase).toBe('roll');
+    // Ben and Cy offer while it is Ann's turn and she has not rolled.
+    expect(applyIntent(t, 1, offerOf(1, 0, [c1], [c0], 20))).toEqual({ ok: true });
+    expect(applyIntent(t, 2, offerOf(2, 1, [c2], [], 0))).toEqual({ ok: true });
+    expect(t.pendingTrades.map((p) => [p.offer.from, p.offer.to])).toEqual([[1, 0], [2, 1]]);
+    // Ann herself can also offer before rolling.
+    expect(applyIntent(t, 0, offerOf(0, 2, [c0], [], 0))).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(3);
+    expect(new Set(t.pendingTrades.map((p) => p.id)).size).toBe(3);
+  });
+
+  it('keeps wire-level checks: own properties only, valid offers, one outstanding offer each', () => {
+    const { t, c0, c1 } = tradeTable();
+    expect(applyIntent(t, 1, offerOf(0, 1, [c0], [], 0))).toEqual({ ok: false, reason: 'You can only offer your own properties' });
+    expect(applyIntent(t, 0, offerOf(0, 1, [c1], [], 0))).toEqual({ ok: false, reason: 'Ann does not own all offered properties' });
+    expect(applyIntent(t, 0, offerOf(0, 0, [c0], [], 0)).ok).toBe(false);
+    expect(applyIntent(t, 0, offerOf(0, 1, [c0], [c1], 50))).toEqual({ ok: true });
+    const again = applyIntent(t, 0, offerOf(0, 2, [c0], [], 0));
+    expect(again).toEqual({ ok: false, reason: 'You already have a trade offer out. Cancel it first' });
+    expect(t.pendingTrades).toHaveLength(1);
+    // Cancelling frees the slot.
+    expect(applyIntent(t, 0, { type: 'cancelTrade' })).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(0);
+    expect(applyIntent(t, 0, offerOf(0, 2, [c0], [], 0))).toEqual({ ok: true });
+  });
+
+  it('answers only from the target, executes on accept and leaves other offers alone', () => {
+    const { t, g, c0, c1, c2 } = tradeTable();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1], 50));
+    applyIntent(t, 2, offerOf(2, 0, [c2], [], 0)); // Cy gives Ann a city for nothing
+    const id = idOf(t, 0);
+    const other = idOf(t, 2);
     expect(applyIntent(t, 0, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: false, reason: 'That trade is not for you' });
-    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id + 1, accept: true })).toEqual({ ok: false, reason: 'That trade is no longer on the table' });
+    expect(applyIntent(t, 2, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: false, reason: 'That trade is not for you' });
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id + 1000, accept: true })).toEqual({ ok: false, reason: 'That trade is no longer on the table' });
     expect(applyIntent(t, 1, { type: 'cancelTrade' })).toEqual({ ok: false, reason: 'You have no pending trade' });
     const cash0 = t.game!.players[0].cash;
     expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: true });
-    expect(t.pendingTrade).toBeNull();
+    expect(t.pendingTrades.map((p) => p.id)).toEqual([other]);
     expect(t.game!.owners[c0]).toBe(1);
     expect(t.game!.owners[c1]).toBe(0);
     expect(t.game!.players[0].cash).toBe(cash0 - 50);
-    expect(t.game!.log.at(-1)).toContain('🤝');
+    expect(t.game!.log.some((l) => l.includes('🤝'))).toBe(true);
     expect(g).not.toBe(t.game); // actions run on a copy
+    expect(applyIntent(t, 0, { type: 'respondTrade', tradeId: other, accept: true })).toEqual({ ok: true });
+    expect(t.game!.owners[c2]).toBe(0);
+    expect(t.pendingTrades).toHaveLength(0);
   });
 
-  it('declines, cancels, and drops stale trades', () => {
+  it('does not block the proposer\'s turn and survives the end of the turn', () => {
     const { t, c0, c1 } = tradeTable();
-    const offer = { from: 0, to: 1, give: [c0], get: [c1], cash: 0 };
-    applyIntent(t, 0, { type: 'proposeTrade', offer });
-    applyIntent(t, 1, { type: 'respondTrade', tradeId: t.pendingTrade!.id, accept: false });
-    expect(t.pendingTrade).toBeNull();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1], 0));
+    const id = idOf(t, 0);
+    expect(applyIntent(t, 0, { type: 'roll' })).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(1);
+    expect(t.game!.phase).toBe('action');
+    const g = t.game!;
+    if (g.pendingBuy !== null) expect(applyIntent(t, 0, { type: 'buy' }).ok).toBe(true);
+    expect(applyIntent(t, 0, { type: 'endTurn' })).toEqual({ ok: true });
+    expect(t.game!.current).toBe(1);
+    expect(t.pendingTrades.map((p) => p.id)).toEqual([id]);
+    // Ben answers on his own turn, after Ann's turn ended.
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true })).toEqual({ ok: true });
+    expect(t.game!.owners[c0]).toBe(1);
+  });
+
+  it('declines, cancels, and refuses answers to old offers', () => {
+    const { t, c0, c1 } = tradeTable();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1]));
+    applyIntent(t, 1, { type: 'respondTrade', tradeId: idOf(t, 0), accept: false });
+    expect(t.pendingTrades).toHaveLength(0);
     expect(t.game!.log.at(-1)).toBe("Ben declined Ann's trade.");
     expect(t.game!.owners[c0]).toBe(0);
 
-    applyIntent(t, 0, { type: 'proposeTrade', offer });
-    const oldId = t.pendingTrade!.id;
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1]));
+    const oldId = idOf(t, 0);
     expect(applyIntent(t, 0, { type: 'cancelTrade' })).toEqual({ ok: true });
-    applyIntent(t, 0, { type: 'proposeTrade', offer: { ...offer, cash: 100 } });
+    expect(t.game!.log.at(-1)).toBe('Ann withdrew their trade offer.');
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1], 100));
     // An answer to the withdrawn offer must not accept the new one.
-    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: oldId, accept: true }).ok).toBe(false);
-    expect(t.pendingTrade).not.toBeNull();
-
-    // Ending the turn cancels it; a late answer is refused.
-    const id = t.pendingTrade!.id;
-    expect(applyIntent(t, 0, { type: 'endTurn' })).toEqual({ ok: true });
-    expect(t.pendingTrade).toBeNull();
+    expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: oldId, accept: true })).toEqual({ ok: false, reason: 'That trade is no longer on the table' });
+    expect(t.pendingTrades).toHaveLength(1);
+    expect(t.game!.owners[c0]).toBe(0);
+    // A decided offer's id is dead, too.
+    const id = idOf(t, 0);
+    applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: false });
     expect(applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true }).ok).toBe(false);
-    expect(t.game!.owners[c0]).toBe(0);
   });
 
-  it('re-validates on accept and clears the trade if it no longer works', () => {
+  it('re-validates on accept and drops the offer if it no longer works', () => {
     const { t, c0 } = tradeTable();
-    applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [], cash: 500 } });
+    applyIntent(t, 0, offerOf(0, 1, [c0], [], 500));
+    const id = idOf(t, 0);
     t.game!.players[0].cash = 10; // e.g. changed by the host's own tooling
-    const r = applyIntent(t, 1, { type: 'respondTrade', tradeId: t.pendingTrade!.id, accept: true });
+    const r = applyIntent(t, 1, { type: 'respondTrade', tradeId: id, accept: true });
     expect(r).toEqual({ ok: false, reason: 'Ann cannot afford $500' });
-    expect(t.pendingTrade).toBeNull();
+    expect(t.pendingTrades).toHaveLength(0);
     expect(t.game!.owners[c0]).toBe(0);
   });
 
-  it('clears a trade when a party is handed to a bot, and resolves trades with bots at once', () => {
+  it('auto-cancels offers whose property changed hands, naming whose offer it was', () => {
     const { t, c0, c1, c2 } = tradeTable();
-    applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 0 } });
-    expect(convertToBot(t, 1)).toEqual({ ok: true });
-    expect(t.pendingTrade).toBeNull();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1])); // Ann -> Ben
+    applyIntent(t, 2, offerOf(2, 0, [c2], [c0])); // Cy -> Ann, asks for the same c0
+    expect(t.pendingTrades).toHaveLength(2);
+    applyIntent(t, 1, { type: 'respondTrade', tradeId: idOf(t, 0), accept: true });
+    expect(t.pendingTrades).toHaveLength(0);
+    expect(t.game!.log.at(-1)).toBe("Cy's trade offer to Ann was cancelled.");
+    expect(t.game!.owners[c2]).toBe(2);
+  });
 
-    const stingy = applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 2, give: [], get: [c2], cash: 0 } });
+  it('auto-cancels offers when a party goes bankrupt', () => {
+    const { t, c0, c1, c2 } = tradeTable();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1]));
+    applyIntent(t, 2, offerOf(2, 0, [c2], []));
+    t.game!.players[1].bankrupt = true; // as the engine would after a ruinous payment
+    expect(applyIntent(t, 0, { type: 'roll' }).ok).toBe(true); // any change sweeps
+    expect(t.pendingTrades.map((p) => p.offer.from)).toEqual([2]);
+    expect(t.game!.log.some((l) => l === "Ann's trade offer to Ben was cancelled.")).toBe(true);
+    // A bankrupt player cannot offer, and nobody can offer to them.
+    expect(applyIntent(t, 1, offerOf(1, 0, [], [c0]))).toEqual({ ok: false, reason: 'You are bankrupt' });
+    expect(applyIntent(t, 2, offerOf(2, 1, [c2], []))).toEqual({ ok: false, reason: 'You already have a trade offer out. Cancel it first' });
+  });
+
+  it('auto-cancels offers when a seat is handed to a bot, and resolves trades with bots at once', () => {
+    const { t, c0, c1, c2, c3 } = tradeTable();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1]));
+    applyIntent(t, 2, offerOf(2, 1, [c2], []));
+    applyIntent(t, 1, offerOf(1, 2, [c1], []));
+    expect(t.pendingTrades).toHaveLength(3);
+    expect(convertToBot(t, 1)).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(0);
+    expect(t.game!.log.filter((l) => l.endsWith('was cancelled.'))).toHaveLength(3);
+
+    const stingy = applyIntent(t, 0, offerOf(0, 3, [], [c3]));
     expect(stingy.ok).toBe(false);
     expect(stingy.ok || stingy.reason).toContain('declined');
-    expect(t.game!.owners[c2]).toBe(2);
-    expect(applyIntent(t, 0, { type: 'proposeTrade', offer: { from: 0, to: 2, give: [c0], get: [], cash: 0 } })).toEqual({ ok: true });
-    expect(t.pendingTrade).toBeNull();
-    expect(t.game!.owners[c0]).toBe(2);
+    expect(t.game!.owners[c3]).toBe(3);
+    // Bots answer at once, on anyone's turn and before the roll.
+    expect(applyIntent(t, 2, offerOf(2, 3, [c2], []))).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(0);
+    expect(t.game!.owners[c2]).toBe(3);
+    // Offers to a seat that is now a bot are answered by the bot instead of being left pending.
+    expect(applyIntent(t, 0, offerOf(0, 1, [c0], []))).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(0);
+  });
+
+  it('drops every offer when the game ends and refuses trades afterwards', () => {
+    const { t, c0, c1 } = tradeTable();
+    applyIntent(t, 0, offerOf(0, 1, [c0], [c1]));
+    expect(applyIntent(t, 0, { type: 'finish' })).toEqual({ ok: true });
+    expect(t.pendingTrades).toHaveLength(0);
+    expect(applyIntent(t, 1, offerOf(1, 0, [c1], []))).toEqual({ ok: false, reason: 'The game is over' });
+  });
+
+  it('refuses spectators and bot seats as proposers', () => {
+    const { t, c0, c3 } = tradeTable();
+    expect(applyIntent(t, null, offerOf(0, 1, [c0], []))).toEqual({ ok: false, reason: 'You do not have a seat' });
+    expect(applyIntent(t, 3, offerOf(3, 0, [c3], []))).toEqual({ ok: false, reason: 'A bot plays this seat' });
+    expect(t.pendingTrades).toHaveLength(0);
   });
 
   it('refuses bot seats, spectators and non-host finish', () => {
     const { t } = tradeTable();
     expect(applyIntent(t, null, { type: 'roll' })).toEqual({ ok: false, reason: 'You do not have a seat' });
-    expect(applyIntent(t, 2, { type: 'roll' })).toEqual({ ok: false, reason: 'A bot plays this seat' });
+    expect(applyIntent(t, 3, { type: 'roll' })).toEqual({ ok: false, reason: 'A bot plays this seat' });
+    expect(applyIntent(t, 1, { type: 'roll' })).toEqual({ ok: false, reason: 'It is not your turn' });
     expect(applyIntent(t, 1, { type: 'finish' })).toEqual({ ok: false, reason: 'Only the host can end the game' });
     expect(applyIntent(t, 0, { type: 'finish' })).toEqual({ ok: true });
     expect(t.game!.phase).toBe('gameOver');
@@ -433,7 +563,7 @@ describe('sessions', () => {
     const rev = host.snapshot!.rev;
     const junk: unknown[] = [
       null, 'hi', 7, [1, 2], { t: 'intent', intent: { type: 'roll' } }, // no hello yet
-      { t: 'hello', v: 1, key: '!!', name: 'X' },
+      { t: 'hello', v: PROTOCOL_VERSION, key: '!!', name: 'X' },
       { t: 'lobby', op: { op: 'claim', seat: 1 } },
       { t: 'snapshot', snapshot: { ...host.snapshot, hostEpoch: 99, game: { version: 1 } } },
       { t: 'snapshot', snapshot: { ...host.snapshot, hostEpoch: 99, seats: [] } },
@@ -441,10 +571,10 @@ describe('sessions', () => {
       { t: 'reject', reason: 'fake' },
     ];
     for (const m of junk) evil.send(m);
-    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'hello', v: PROTOCOL_VERSION, key: 'E'.repeat(26), name: 'Eve' });
     evil.send({ t: 'intent', intent: { type: 'roll' } }); // valid shape, but a spectator
     evil.send({ t: 'intent', intent: { type: 'fly', dest: AIRPORTS[0] } });
-    evil.send({ t: 'hello', v: 2, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'hello', v: PROTOCOL_VERSION - 1, key: 'E'.repeat(26), name: 'Eve' });
     await flush();
     expect(host.role).toBe('host');
     expect(host.snapshot!.rev).toBe(rev);
@@ -468,14 +598,38 @@ describe('sessions', () => {
     game(host).owners[c1] = 1;
     host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [c0], get: [c1], cash: 0 } });
     await flush();
-    const pending = gus.snapshot!.pendingTrade!;
+    const pending = gus.snapshot!.pendingTrades[0];
     expect(pending.offer.to).toBe(gus.selfSeat);
     gus.send({ type: 'respondTrade', tradeId: pending.id, accept: true });
     await flush();
     expect(gus.lastRejection).toBeNull();
     expect(game(gus).owners[c0]).toBe(1);
     expect(game(gus).owners[c1]).toBe(0);
-    expect(gus.snapshot!.pendingTrade).toBeNull();
+    expect(gus.snapshot!.pendingTrades).toEqual([]);
+  });
+
+  it('lets a guest offer on the host\'s turn before the roll, and several offers coexist over the wire', async () => {
+    const { host, gus, ivy } = await startedGame();
+    const [a, b, c] = sectionCities('africa');
+    Object.assign(game(host).owners, { [a]: 0, [b]: 1, [c]: 2 });
+    expect(game(host).current).toBe(0);
+    expect(game(host).phase).toBe('roll');
+    gus.send({ type: 'proposeTrade', offer: { from: 1, to: 2, give: [b], get: [c], cash: 0 } });
+    ivy.send({ type: 'proposeTrade', offer: { from: 2, to: 0, give: [c], get: [a], cash: 0 } });
+    host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [a], get: [], cash: 0 } });
+    await flush();
+    expect(host.lastRejection).toBeNull();
+    expect(gus.lastRejection).toBeNull();
+    expect(ivy.lastRejection).toBeNull();
+    expect(host.snapshot!.pendingTrades).toHaveLength(3);
+    expect(gus.snapshot!.pendingTrades).toEqual(host.snapshot!.pendingTrades);
+    // Host rolls with its own offer open; a second offer from the host is refused.
+    host.send({ type: 'roll' });
+    host.send({ type: 'proposeTrade', offer: { from: 0, to: 2, give: [a], get: [], cash: 0 } });
+    await flush();
+    expect(game(host).phase).toBe('action');
+    expect(host.lastRejection).toBe('You already have a trade offer out. Cancel it first');
+    expect(host.snapshot!.pendingTrades).toHaveLength(3);
   });
 
   it('gives a reconnecting guest their seat back by client key, and never broadcasts the key', async () => {
@@ -633,7 +787,7 @@ describe('sessions', () => {
     const inbox: { t: string; reason?: string }[] = [];
     evil.onMessage((m) => inbox.push(m as { t: string }));
     await flush();
-    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'hello', v: PROTOCOL_VERSION, key: 'E'.repeat(26), name: 'Eve' });
     evil.send({ t: 'lobby', op: { op: 'claim', seat: 0 } }); // the host's seat
     evil.send({ t: 'lobby', op: { op: 'claim', seat: 5 } }); // no such seat
     evil.send({ t: 'lobby', op: { op: 'claim', seat: 1 } });
@@ -663,10 +817,10 @@ describe('sessions', () => {
     const [a, b, c] = sectionCities('africa');
     Object.assign(game(host).owners, { [a]: 0, [b]: 1, [c]: 1 });
     host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [a], get: [b], cash: 0 } });
-    const first = host.snapshot!.pendingTrade!.id;
+    const first = host.snapshot!.pendingTrades[0].id;
     host.send({ type: 'cancelTrade' });
     host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [a], get: [c], cash: 0 } });
-    const second = host.snapshot!.pendingTrade!.id;
+    const second = host.snapshot!.pendingTrades[0].id;
     expect(second).not.toBe(first);
     await flush();
     const seen: (string | undefined)[] = [];
@@ -685,14 +839,14 @@ describe('sessions', () => {
     const { host, hub } = await setup([]);
     const evil = hub.connect('evil');
     await flush();
-    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'hello', v: PROTOCOL_VERSION, key: 'E'.repeat(26), name: 'Eve' });
     evil.send({ t: 'lobby', op: { op: 'claim', seat: 1 } });
     await flush();
     expect(host.snapshot!.seats[1]).toMatchObject({ name: 'Eve', connected: true });
-    evil.send({ t: 'hello', v: 1, key: 'F'.repeat(26), name: 'Fay' });
+    evil.send({ t: 'hello', v: PROTOCOL_VERSION, key: 'F'.repeat(26), name: 'Fay' });
     await flush();
     expect(host.snapshot!.seats[1].connected).toBe(false);
-    for (let i = 0; i < 50; i++) evil.send({ t: 'hello', v: 1, key: `K${String(i).padStart(20, '0')}`, name: 'X' });
+    for (let i = 0; i < 50; i++) evil.send({ t: 'hello', v: PROTOCOL_VERSION, key: `K${String(i).padStart(20, '0')}`, name: 'X' });
     await flush();
     expect((host as unknown as { helloNames: Map<string, string> }).helloNames.size).toBe(1); // bounded per connection
   });

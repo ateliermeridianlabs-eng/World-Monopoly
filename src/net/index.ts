@@ -22,10 +22,13 @@
  *
  * Render hints:
  * - `session.selfSeat` is your engine player id (null = spectator). Your turn: `game.current === selfSeat`.
- * - Pending trade for you: `snapshot.pendingTrade?.offer.to === selfSeat`; answer with
- *   `send({ type: 'respondTrade', tradeId: pendingTrade.id, accept })`. The proposer sees the same
- *   pendingTrade and may `send({ type: 'cancelTrade' })`; their other actions are refused until it is
- *   answered, and ending the turn cancels it. Outcomes appear in `game.log`.
+ * - Trading is allowed at any time, on anyone's turn, for every seated non-bankrupt human: offer with
+ *   `send({ type: 'proposeTrade', offer })` (`offer.from === selfSeat`). Each proposer has at most one
+ *   outstanding offer; propose again only after it is answered or `send({ type: 'cancelTrade' })`.
+ * - `snapshot.pendingTrades` lists all open offers. Offers for you: `pendingTrades.filter((p) => p.offer.to === selfSeat)`;
+ *   answer one with `send({ type: 'respondTrade', tradeId: p.id, accept })`. Your own: `offer.from === selfSeat`.
+ *   An open offer never blocks the proposer's turn actions and survives the end of the turn. The host drops offers that
+ *   can no longer happen (game over, a party bankrupt or handed to a bot, a property changed hands); outcomes appear in `game.log`.
  * - Trades with a bot resolve immediately; a bot's refusal arrives as a rejection.
  * - `seat.connected === false` on a human seat: that player is away. The host can
  *   `convertToBot(seat)`; the player gets the seat back by rejoining (same browser).

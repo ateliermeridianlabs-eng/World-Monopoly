@@ -66,6 +66,10 @@ try {
   await solo.click('[data-act="start"]');
   await solo.waitForSelector('[data-act="roll"]');
   check(!(await has(solo, '.room-bar')), 'hot-seat panel has no room bar');
+  await solo.click('[data-act="trade"]'); // also available before the roll, with a From picker
+  await solo.waitForSelector('.modal [data-from]');
+  check((await solo.locator('.modal [data-from] option').count()) === 1 && (await solo.locator('.modal [data-partner] option').count()) === 3, 'hot-seat trade modal has From (humans only) and With pickers before the roll');
+  await solo.click('[data-close]');
   await solo.click('[data-act="roll"]');
   await solo.waitForSelector('[data-act="end"]');
   await solo.click('[data-act="end"]');
@@ -235,23 +239,27 @@ try {
       await page.click('[data-propose]');
       await until(async () => (await other.locator('.modal:has-text("Trade offer")').count()) > 0, 'target sees trade prompt');
       check(true, `${otherName} sees a trade prompt even though it is not their turn`);
-      check(/Waiting for/.test(await page.locator('.actions').innerText()) && (await has(page, '[data-act="cancel-trade"]')), 'proposer sees waiting + Cancel');
+      check(/Waiting for/.test(await page.locator('.trade-bar').innerText()) && (await has(page, '[data-act="cancel-trade"]')), 'proposer sees waiting + Cancel');
+      check(await has(page, '[data-act="end"]'), 'proposer keeps the normal turn buttons while the offer is open');
       check(!(await has(page, '.modal.open, .modal-root.open')), 'proposer has no modal open');
       await shot(other, '4-trade-prompt');
       // cancel once: prompt must close by itself
       await page.click('[data-act="cancel-trade"]');
       await until(async () => (await other.locator('.modal-root.open').count()) === 0, 'prompt closes after cancel');
       check(true, 'prompt closed on target after the proposer cancelled');
-      // propose again and accept
-      await page.click('[data-act="trade"]');
-      await page.waitForSelector('.modal [data-partner]');
-      await page.selectOption('[data-partner]', { label: otherName });
-      await page.locator('.modal input[name="give"]').first().check();
-      await page.click('[data-propose]');
-      await until(async () => (await other.locator('.modal:has-text("Trade offer")').count()) > 0, 'second prompt');
-      await other.click('.modal [data-accept]');
+      // the player whose turn it is not offers, buying one of the mover's properties for cash; the mover answers
+      check(await has(other, '[data-act="trade"]'), 'a player who is not on turn has a Trade button');
+      await other.click('[data-act="trade"]');
+      await other.waitForSelector('.modal [data-partner]');
+      await other.selectOption('[data-partner]', { label: who });
+      await other.locator('.modal input[name="get"]').first().check();
+      await other.fill('.modal [data-cash]', '10');
+      await other.click('[data-propose]');
+      await until(async () => (await page.locator('.modal:has-text("Trade offer")').count()) > 0, 'mover sees the off-turn offer');
+      check(true, `${who} sees an offer from ${otherName} on their own turn`);
+      await page.click('.modal [data-accept]');
       await until(async () => /traded/.test(await page.locator('.log').innerText()), 'trade appears in the log');
-      check(true, 'trade accepted by the other human and executed');
+      check(true, 'off-turn trade accepted and executed');
       check((await other.locator('.modal-root.open').count()) === 0 && (await page.locator('.modal-root.open').count()) === 0, 'no modals left open');
       traded = true;
       await endTurn(page);

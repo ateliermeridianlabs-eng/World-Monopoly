@@ -123,6 +123,30 @@ describe('turn flow', () => {
     expect(s.players[1].cash).toBe(1500 + 100);
   });
 
+  it('validates trades regardless of whose turn it is or the phase', () => {
+    const s = createGame(['banker', 'diplomat', 'landlord'].map((roleId, i) => ({ name: `P${i}`, isBot: false, roleId })), 42);
+    const [a, b] = sectionCities('uk');
+    give(s, 1, [a]);
+    give(s, 2, [b]);
+    expect(s.current).toBe(0);
+    for (const phase of ['roll', 'action'] as const) {
+      s.phase = phase;
+      // Players 1 and 2 trade while player 0 is up.
+      expect(validateTrade(s, { from: 1, to: 2, give: [a], get: [b], cash: 10 })).toBeNull();
+    }
+    executeTrade(s, { from: 1, to: 2, give: [a], get: [b], cash: 10 });
+    expect(s.owners[a]).toBe(2);
+    expect(s.owners[b]).toBe(1);
+    expect(s.current).toBe(0); // trading never touches the turn
+    expect(s.phase).toBe('action');
+    s.players[2].bankrupt = true;
+    expect(validateTrade(s, { from: 1, to: 2, give: [b], get: [], cash: 0 })).toBe('Pick another player');
+    s.players[2].bankrupt = false;
+    s.phase = 'gameOver';
+    expect(validateTrade(s, { from: 1, to: 2, give: [b], get: [], cash: 0 })).toBe('The game is over');
+    expect(() => executeTrade(s, { from: 1, to: 2, give: [b], get: [], cash: 0 })).toThrow('The game is over');
+  });
+
   it('rejects trade cash that is not a whole number', () => {
     const s = twoPlayers();
     const [a] = sectionCities('uk');
