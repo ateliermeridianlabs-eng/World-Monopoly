@@ -70,7 +70,7 @@ Landing on an unowned city, utility, airport or seaport lets you buy it at its p
 - City tiers by price: low up to $150 (house $50), mid up to $320 (house $100), high above $320 (house $200) (`tiers`).
 - On your turn you may build one level at a time on any city you own: houses 1-4, then a hotel (level 5). No full set is needed for houses, and building need not be even. A hotel needs all 8 cities of that section.
 - Selling a building refunds 50% of its house cost.
-- **Rent** (only cities charge rent): base = 8% of price, rounded, at least $2; the final rent, after the section bonus, is rounded to the nearest dollar; times 1 / 4 / 12 / 28 / 34 / 40 for an empty lot / 1 / 2 / 3 / 4 houses / hotel.
+- **Rent** (only cities charge rent): base = 8% of price, rounded, at least $2, times 1 / 4 / 12 / 28 / 34 / 40 for an empty lot / 1 / 2 / 3 / 4 houses / hotel. The final rent, after the section bonus, is rounded to the nearest dollar.
 - **Section bonus:** rent rises 10% for every square the owner holds in that section beyond the first, counting its cities and utility meters (12 squares), capped at +110% (+50% when the owner is a Diplomat).
 
 ### Utilities
@@ -124,7 +124,7 @@ Band for every pair (S/M/L, distance in thousands of km):
 
 ### Lap income and New Year
 
-Each time you reach or pass New Year (by dice or by a card that moves you forward) you collect **lap income**, untaxed, before anything else New Year does:
+Each time you reach or pass New Year (by dice or by a card that moves you forward) you collect **lap income**, untaxed:
 
 - lap income = $2,000 x min(1, squares walked since your last lap income / 144), **rounded down to $10** (`lapIncome`).
 - *Squares walked* counts only forward movement along the track: dice, and cards that move you forward (Remote work bonus, Rerouted, Advance to New Year, Hitch a ride on a freighter). Flights, sailing, swapping places and moving backward (Wrong turn, Visa denied) do not count. The count resets at each payout; walking more than 144 squares between payouts is not carried over.
