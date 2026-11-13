@@ -52,7 +52,7 @@ Two ways to play: hot-seat for 2 to 6 players on one device (any seat can be a b
 
 ### How to play online
 
-1. On the start screen, enter your name and press "Host online game". You get a lobby with a 6-character room code.
+1. On the start screen, enter your name and press "Host online game". You get a lobby with a 12-character room code (shown as `XXXX-XXXX-XXXX`).
 2. Press "Copy invite link" and send it to the others (or give them the code; they paste it under "Join with code").
 3. Each guest opens the link, enters a name, and sits in an open seat. Everyone can pick a role that nobody else has. The host can add seats, turn a seat into a bot, rename bots, and set the round limit.
 4. When no seat is open, the host presses "Start game". Only the player whose turn it is gets the controls; everyone else sees whose turn it is. A trade offer pops up for the player it is addressed to, even on someone else's turn.
@@ -66,10 +66,10 @@ For development, `npm run dev` with `?memnet=1` in the URL replaces the network 
 
 ### How it works
 
-Peer-to-peer over WebRTC, with no game server. Players find each other through public Nostr relays via [Trystero](https://github.com/dmotz/trystero) (`@trystero-p2p/nostr`, 6 relays in parallel); after that, game messages go browser to browser. The 6-character room code (in the link as `#room=ABC234`) is the room name and its password, so relays only see a hashed topic and encrypted handshakes.
+Peer-to-peer over WebRTC, with no game server. Players find each other through public Nostr relays via [Trystero](https://github.com/dmotz/trystero) (`@trystero-p2p/nostr`, 6 relays in parallel); after that, game messages go browser to browser. The 12-character room code (in the link as `#room=ABCDEFGHJKMN`) is the room name and its password. It is the room's only secret. Relays see a topic that is a fast, unsalted hash of the code, which is why the code is 12 characters: a shorter one could be guessed from public relay traffic. Twelve characters make guessing impractical; they do not add accounts or authentication.
 
 - One browser is the host. It holds the real game state, runs the engine and the bots, and sends the full state to everyone after every change. Guests only send requests ("roll", "buy", "build 37") and show what the host sends.
-- Trust model: the host decides everything, so a host can cheat, and anyone with the room code can join, watch, or claim to be the new host. Play with people you would hand the dice to.
+- Trust model: the host decides everything, so a host can cheat, and anyone with the room code can join, watch, or claim to be the new host. Share the link only with people you are playing with, and play with people you would hand the dice to.
 - Guests check every message they receive and the host checks every request: wrong turn, wrong seat, bad shapes and engine errors are refused and the reason is shown to the sender.
 - Trades between humans wait for the other player's answer. While an offer is open the proposer can only cancel it or end the turn, and ending the turn cancels it. Trades with bots are answered at once.
 - A player who reloads gets their seat back (a private key in `localStorage` identifies the browser; snapshots only show a hash of it). The host can hand an absent player's seat to a bot; the player gets it back when they return.

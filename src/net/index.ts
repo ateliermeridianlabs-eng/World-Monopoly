@@ -43,6 +43,6 @@ export type { Result } from './authority';
 export { createTrysteroTransport, createMemoryTransportHub, turnFromEnv, APP_ID, RELAY_REDUNDANCY, MAX_MESSAGE_BYTES } from './transport';
 export type { Transport, TrysteroOptions } from './transport';
 export {
-  Session, hostSession, joinSession, loadHostSave, clearHostSave, newRoomCode, normalizeRoomCode, roomCodeFromHash, roomLink, setRoomInUrl,
+  Session, hostSession, joinSession, loadHostSave, clearHostSave, newRoomCode, formatRoomCode, normalizeRoomCode, roomCodeFromHash, roomLink, setRoomInUrl,
 } from './session';
 export type { SessionOptions, SessionRole, SessionStatus, SessionListener, StorageLike, HostSave } from './session';

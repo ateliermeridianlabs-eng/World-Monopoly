@@ -82,7 +82,7 @@ button.wide { width: 100%; }
 .join-row input { flex: 1; min-width: 0; }
 .room-card { display: grid; gap: 8px; justify-items: start; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .room-card p { margin: 0; }
-.room-code { font: 700 40px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.18em; user-select: all; overflow-wrap: anywhere; }
+.room-code { font: 700 32px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.1em; user-select: all; overflow-wrap: anywhere; }
 .invite { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; }
 .invite-link { flex: 1 1 100%; min-width: 0; font-size: 12.5px; }
 .lobby-row { grid-template-columns: 14px 1fr auto; }
@@ -100,7 +100,7 @@ button.wide { width: 100%; }
   .lobby-row { grid-template-columns: 14px 1fr; }
   .lobby-row select { grid-column: 2; }
   .seat-actions { grid-column: 2; }
-  .room-code { font-size: 32px; }
+  .room-code { font-size: 24px; }
 }
 
 /* ---------- game layout ---------- */

@@ -12,7 +12,7 @@ describe('ui storage keys', () => {
       setItem: (k, v) => void data.set(k, v),
       removeItem: (k) => void data.delete(k),
     };
-    const session = hostSession({ transport: createMemoryTransportHub().connect('h'), roomCode: 'ABC234', name: 'Hana', storage });
+    const session = hostSession({ transport: createMemoryTransportHub().connect('h'), roomCode: 'ABCDEFGHJKMN', name: 'Hana', storage });
     expect(data.has(HOST_SAVE_KEY)).toBe(true);
     session.leave();
     expect(data.has(HOST_SAVE_KEY)).toBe(false);

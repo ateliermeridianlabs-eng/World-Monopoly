@@ -106,7 +106,7 @@ let onlineName = store.get(NAME_KEY) ?? '';
 let joinInput = '';
 let onlineMsg = '';
 let busy = false;
-/** undefined = not checked yet, null = no save, string = room code of a hosted game that can be resumed. */
+/** undefined = not checked yet, null = no save, string = room code (display form) of a hosted game that can be resumed. */
 let hostSaveCode: string | null | undefined;
 
 const onlineExit = () => {

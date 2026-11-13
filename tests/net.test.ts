@@ -5,7 +5,7 @@ import { botStep } from '../src/engine/bot';
 import type { GameState } from '../src/engine/types';
 import {
   applyIntent, applyLobbyOp, clientIdFromKey, convertToBot, createMemoryTransportHub, createTable, hostSession, joinSession,
-  loadHostSave, needsBotStep, newRoomCode, normalizeRoomCode, parseIntent, parseMessage, roomCodeFromHash, roomLink, setSeat,
+  formatRoomCode, loadHostSave, needsBotStep, newRoomCode, normalizeRoomCode, parseIntent, parseMessage, roomCodeFromHash, roomLink, setSeat,
   startGame, stepBot, turnFromEnv,
 } from '../src/net';
 import type { Intent, Session, Snapshot, StorageLike } from '../src/net';
@@ -27,7 +27,7 @@ function fakeStorage(): StorageLike & { data: Map<string, string> } {
   };
 }
 
-const ROOM = 'ABC234';
+const ROOM = 'ABCDEFGHJKMN';
 const BOT_MS = 100;
 
 /** Host "Hana" plus guests, all on one in-memory hub. */
@@ -150,12 +150,20 @@ describe('protocol', () => {
   });
 
   it('makes and reads room codes', () => {
-    for (let i = 0; i < 200; i++) expect(newRoomCode()).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
-    expect(normalizeRoomCode(' abc-234 ')).toBe('ABC234');
-    expect(normalizeRoomCode('ABC10O')).toBeNull();
-    expect(roomCodeFromHash('#room=xyz789')).toBe('XYZ789');
+    for (let i = 0; i < 200; i++) expect(newRoomCode()).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$/);
+    expect(normalizeRoomCode('ABCDEFGHJKMN')).toBe('ABCDEFGHJKMN');
+    expect(normalizeRoomCode(' abcd-efgh-jkmn ')).toBe('ABCDEFGHJKMN');
+    expect(normalizeRoomCode('abcd efgh\tjkmn')).toBe('ABCDEFGHJKMN');
+    expect(normalizeRoomCode('ab-cdefgh-jk mn')).toBe('ABCDEFGHJKMN');
+    expect(normalizeRoomCode('ABC234')).toBeNull(); // old 6-character codes are not accepted
+    expect(normalizeRoomCode('ABCDEFGHJKMNP')).toBeNull();
+    expect(normalizeRoomCode('ABCDEFGHJKM0')).toBeNull();
+    expect(formatRoomCode('ABCDEFGHJKMN')).toBe('ABCD-EFGH-JKMN');
+    expect(normalizeRoomCode(formatRoomCode(newRoomCode()))).not.toBeNull();
+    expect(roomCodeFromHash('#room=xyz7-89ab-cd23')).toBe('XYZ789ABCD23');
+    expect(roomCodeFromHash('#room=XYZ789')).toBeNull();
     expect(roomCodeFromHash('')).toBeNull();
-    expect(roomLink('XYZ789', 'https://me.github.io/world-monopoly/?a=1#old')).toBe('https://me.github.io/world-monopoly/?a=1#room=XYZ789');
+    expect(roomLink('XYZ789ABCD23', 'https://me.github.io/world-monopoly/?a=1#old')).toBe('https://me.github.io/world-monopoly/?a=1#room=XYZ789ABCD23');
   });
 
   it('reads TURN servers from env only when set', () => {
@@ -531,6 +539,13 @@ describe('sessions', () => {
 
     const save = loadHostSave(hostStore)!;
     expect(save.roomCode).toBe(ROOM);
+    // a save made with an old 6-character code is ignored, not resumed
+    const stale = fakeStorage();
+    stale.setItem('world-monopoly-net-host-v1', JSON.stringify({ roomCode: 'ABC234', snapshot: save.snapshot }));
+    expect(loadHostSave(stale)).toBeNull();
+    expect(loadHostSave(stale, true)).toBeNull();
+    stale.setItem('world-monopoly-net-host-v1', JSON.stringify({ roomCode: formatRoomCode(ROOM), snapshot: save.snapshot }));
+    expect(loadHostSave(stale)?.roomCode).toBe(ROOM);
     const host2 = hostSession({ transport: hub.connect('host-2'), roomCode: save.roomCode, name: 'Hana', storage: hostStore, resume: save.snapshot, botDelayMs: BOT_MS });
     await flush();
     expect(host2.snapshot!.hostEpoch).toBe(before.hostEpoch + 1);

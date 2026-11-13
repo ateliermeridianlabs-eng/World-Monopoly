@@ -3,7 +3,7 @@
 
 import { PLAYER_COLORS, RULES, ROLES, roleById } from '../engine/data';
 import {
-  createTrysteroTransport, hostSession, joinSession, loadHostSave, newRoomCode, normalizeRoomCode, roomLink, setRoomInUrl, turnFromEnv,
+  createTrysteroTransport, hostSession, joinSession, loadHostSave, newRoomCode, formatRoomCode, normalizeRoomCode, roomLink, setRoomInUrl, turnFromEnv,
 } from '../net';
 import type { Seat, Session, Transport } from '../net';
 import { NAME_KEY, devParams, store, uiStorage } from './store';
@@ -17,9 +17,10 @@ export interface OnlineEnv {
   exit(): void;
 }
 
-/** Room code of the unfinished game this browser hosted, if any. */
+/** Room code (display form) of the unfinished game this browser hosted, if any. */
 export function hostSaveRoom(): string | null {
-  return loadHostSave(uiStorage)?.roomCode ?? null;
+  const code = loadHostSave(uiStorage)?.roomCode;
+  return code ? formatRoomCode(code) : null;
 }
 
 /** Accepts a bare code or anything containing `room=CODE` (a pasted link or hash). */
@@ -132,7 +133,7 @@ function roomView(session: Session): RoomView | null {
   if (!snap) return null;
   const self = session.selfSeat;
   return {
-    code: session.roomCode,
+    code: formatRoomCode(session.roomCode),
     link: roomLink(session.roomCode, location.href),
     selfSeat: self,
     isHost: session.isHost,
@@ -251,7 +252,7 @@ function renderConnecting(a: Active) {
       <h1>World Monopoly</h1>
       <div class="room-card">
         <span class="muted small">Room</span>
-        <div class="room-code" aria-label="Room code">${esc(a.session.roomCode)}</div>
+        <div class="room-code" aria-label="Room code">${esc(formatRoomCode(a.session.roomCode))}</div>
         <p role="status">Connecting…</p>
         ${slow ? '<p class="muted small">Still nothing from the host. The room may not exist (check the code), the host may have closed the page, or this network may be blocking peer-to-peer connections.</p>' : ''}
       </div>
@@ -319,7 +320,7 @@ function renderLobby(a: Active) {
       ${hostLostHtml(room)}
       <div class="room-card">
         <span class="muted small">Room code</span>
-        <div class="room-code" aria-label="Room code">${esc(session.roomCode)}</div>
+        <div class="room-code" aria-label="Room code">${esc(formatRoomCode(session.roomCode))}</div>
         ${inviteHtml(room.link)}
         <p class="small muted" data-conn role="status">${host ? `Hosting · ${present} player${present === 1 ? '' : 's'} connected` : session.status === 'host-lost' ? 'Host lost' : `Connected · ${present} player${present === 1 ? '' : 's'} in the room`}</p>
       </div>

@@ -85,7 +85,7 @@ try {
     await evilHost.fill('[data-online-name]', '<b id=_x>');
     await evilHost.click('[data-act="host-online"]');
     await evilHost.waitForSelector('.room-code');
-    const evilCode = (await evilHost.locator('.room-code').innerText()).trim();
+    const evilCode = (await evilHost.locator('.room-code').innerText()).trim().replaceAll('-', '');
     const evilGuest = await open('evil2', `#room=${evilCode}`);
     await evilGuest.waitForSelector('[data-prompt-name]');
     await evilGuest.fill('[data-prompt-name]', '<i id=_y>');
@@ -106,7 +106,7 @@ try {
 
   // ---- joining a room nobody hosts: hint after ~15 s, Leave works
   {
-    const lost = await open('lost', '#room=ABCDE2');
+    const lost = await open('lost', '#room=ABCDEFGHJKM2');
     await lost.waitForSelector('[data-prompt-name]');
     await lost.fill('[data-prompt-name]', 'Lee');
     await lost.click('[data-act="go"]');
@@ -125,8 +125,9 @@ try {
   await host.fill('[data-online-name]', 'Hana');
   await host.click('[data-act="host-online"]');
   await host.waitForSelector('.room-code');
-  const code = (await host.locator('.room-code').innerText()).trim();
-  check(/^[A-Z2-9]{6}$/.test(code), `host lobby shows room code ${code}`);
+  const shown = (await host.locator('.room-code').innerText()).trim();
+  check(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(shown), `host lobby shows grouped room code ${shown}`);
+  const code = shown.replaceAll('-', '');
   await host.click('[data-act="copy-link"]');
   await until(async () => (await host.evaluate(() => navigator.clipboard.readText())).includes(`#room=${code}`), 'invite link copied');
   check(true, 'Copy invite link puts the #room= link on the clipboard');
@@ -138,7 +139,7 @@ try {
   await guest.fill('[data-prompt-name]', 'Gus');
   await guest.click('[data-act="go"]');
   await guest.waitForSelector('.room-code');
-  check((await guest.locator('.room-code').innerText()).trim() === code, 'guest joined by link and sees the same room code');
+  check((await guest.locator('.room-code').innerText()).trim() === shown, 'guest joined by link and sees the same room code');
   await until(async () => /Connected/.test(await guest.locator('[data-conn]').innerText()), 'guest connected');
   check(await has(guest, '.toast:has-text("watching")'), 'guest is a spectator before claiming');
   await guest.click('[data-act="copy-link"]');
@@ -285,7 +286,7 @@ try {
   await host.reload();
   await host.waitForSelector('.panel');
   const hostText = await host.locator('.room-bar').innerText();
-  check(hostText.includes(code), 'host reload resumed the same room');
+  check(hostText.includes(shown), 'host reload resumed the same room');
   await until(async () => !(await has(guest, '.banner')) && !/away/.test(await guest.locator('.players li', { hasText: 'Hana' }).first().innerText()), 'guest follows resumed host');
   check(true, 'guest follows the resumed host (no host-lost banner, host not away)');
   check(await has(host, '[data-act="finish"]'), 'host sees "End game now"');
@@ -309,10 +310,10 @@ try {
   // ---- the new host's page, opened without the #room hash, offers to resume the hosted game
   await guest.goto(`${BASE}?memnet=1&as=guest`);
   await guest.waitForSelector('[data-act="resume-host"]');
-  check((await guest.locator('[data-act="resume-host"]').innerText()).includes(code), 'setup offers "Resume hosted game (room CODE)"');
+  check((await guest.locator('[data-act="resume-host"]').innerText()).includes(shown), 'setup offers "Resume hosted game (room CODE)"');
   await guest.click('[data-act="resume-host"]');
   await guest.waitForSelector('.panel');
-  check((await guest.locator('.room-bar').innerText()).includes(code), 'resuming brings the hosted room back');
+  check((await guest.locator('.room-bar').innerText()).includes(shown), 'resuming brings the hosted room back');
 
   // ---- game over, then a reload of #room=CODE keeps hosting the finished room (not "Connecting…" as a guest of itself)
   await guest.click('[data-act="finish"]');

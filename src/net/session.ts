@@ -46,7 +46,9 @@ export interface HostSave {
 const CLIENT_KEY = 'world-monopoly-net-client-v1';
 const HOST_SAVE_KEY = 'world-monopoly-net-host-v1';
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 symbols, no 0/O/1/I
-const ROOM_RE = new RegExp(`^[${ROOM_ALPHABET}]{6}$`);
+/** 12 symbols = 60 bits. The relay topic is a fast unsalted hash of the code, so shorter codes can be brute-forced from public relay traffic. */
+const ROOM_CODE_LENGTH = 12;
+const ROOM_RE = new RegExp(`^[${ROOM_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
 
 // ---------- storage ----------
 
@@ -109,18 +111,23 @@ export function clearHostSave(storage?: StorageLike | null) {
 
 // ---------- room codes ----------
 
-/** Random 6-character room code without look-alike characters (no 0, O, 1, I). */
+/** Random 12-character room code without look-alike characters (no 0, O, 1, I). */
 export function newRoomCode(): string {
-  return randomString(6);
+  return randomString(ROOM_CODE_LENGTH);
 }
 
-/** Uppercases and strips spaces/dashes; returns null unless it is a valid room code. */
+/** Display form `ABCD-EFGH-JKMN` of a room code. Only for showing to people; store, send and link the plain code. */
+export function formatRoomCode(code: string): string {
+  return code.replace(/(.{4})(?=.)/g, '$1-');
+}
+
+/** Uppercases and strips spaces/dashes anywhere; returns null unless it is a valid 12-character room code (older 6-character codes are not accepted). */
 export function normalizeRoomCode(input: string): string | null {
   const code = String(input).toUpperCase().replace(/[\s-]/g, '');
   return ROOM_RE.test(code) ? code : null;
 }
 
-/** Reads `#room=ABC123` from a hash string (e.g. `location.hash`). */
+/** Reads `#room=ABCDEFGHJKMN` from a hash string (e.g. `location.hash`). */
 export function roomCodeFromHash(hash: string): string | null {
   return normalizeRoomCode(new URLSearchParams(hash.replace(/^#/, '')).get('room') ?? '');
 }
