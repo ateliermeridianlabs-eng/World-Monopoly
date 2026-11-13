@@ -23,6 +23,11 @@
   --halo: #fffdf5;
   --grid: rgb(30 80 120 / 0.14);
   --route: #34536f;
+  --lane: #1b3a6b;
+  --lane-halo: rgb(225 238 248 / 0.85);
+  --fly-short: #2b8a3e;
+  --fly-medium: #d9480f;
+  --fly-long: #a61e4d;
   color-scheme: light;
 }
 
@@ -51,6 +56,11 @@
     --halo: #17181b;
     --grid: rgb(150 190 230 / 0.1);
     --route: #a9c1d9;
+    --lane: #8fb8ff;
+    --lane-halo: rgb(10 25 40 / 0.8);
+    --fly-short: #69db7c;
+    --fly-medium: #ffa94d;
+    --fly-long: #f783ac;
     color-scheme: dark;
   }
 }
@@ -173,6 +183,33 @@ button.wide { width: 100%; }
 .map-route { pointer-events: none; }
 .map-route path { fill: none; stroke: var(--route); stroke-width: 0.045; stroke-linecap: round; stroke-dasharray: 0.12 0.09; opacity: 0.8; }
 .map-route path.head { stroke-width: 0.06; stroke-dasharray: none; stroke-linejoin: round; opacity: 0.95; }
+/* Sea routes: dotted navy shipping lanes with their names along them (names only when zoomed in). */
+.map-lanes { pointer-events: none; }
+.lane-halo { fill: none; stroke: var(--lane-halo); stroke-width: 0.2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.7; }
+.lane-line { fill: none; stroke: var(--lane); stroke-width: 0.1; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 0.001 0.22; opacity: 0.85; }
+.lane-name { fill: var(--lane); font: italic 600 0.36px Georgia, 'Times New Roman', serif; letter-spacing: 0.04em; text-anchor: middle; dominant-baseline: text-after-edge; paint-order: stroke; stroke: var(--lane-halo); stroke-width: 0.12; }
+.board.compact .lane-name { display: none; }
+.board.compact .lane-line { stroke-width: 0.14; stroke-dasharray: 0.001 0.3; }
+.map-lanes.dim .lane:not(.open) { opacity: 0.35; }
+.lane.open .lane-line { opacity: 1; }
+.lane.open .lane-name { font-weight: 800; }
+/* Trips open to the current player: flight arcs by band, open lanes, destination outlines and fare badges. */
+.travel { pointer-events: none; }
+.arc { fill: none; stroke-width: 0.1; stroke-linecap: round; opacity: 0.9; }
+.arc-short { stroke: var(--fly-short); }
+.arc-medium { stroke: var(--fly-medium); stroke-dasharray: 0.4 0.2; }
+.arc-long { stroke: var(--fly-long); stroke-width: 0.13; stroke-dasharray: 0.9 0.2 0.15 0.2; }
+.travel .arcs path { filter: drop-shadow(0 0 0.04px var(--halo)); }
+.lane-open { fill: none; stroke: var(--accent); stroke-width: 0.07; stroke-linecap: round; stroke-dasharray: 0.35 0.25; opacity: 0.9; animation: sail 1.6s linear infinite; }
+@keyframes sail { to { stroke-dashoffset: -1.2; } }
+.dest-ring { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 0.1; stroke-dasharray: 0.16 0.1; }
+.tile.dest { cursor: pointer; }
+.fare rect { fill: var(--surface); stroke: var(--lane); stroke-width: 0.05; }
+.fare-short rect { stroke: var(--fly-short); }
+.fare-medium rect { stroke: var(--fly-medium); }
+.fare-long rect { stroke: var(--fly-long); }
+.fare text { fill: var(--text); font: 700 0.3px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+@media (prefers-reduced-motion: reduce) { .lane-open { animation: none; } }
 .map-cities circle { fill: var(--text); stroke: var(--halo); stroke-width: 0.03; pointer-events: none; }
 .hl { fill: none; pointer-events: none; stroke-linejoin: round; }
 .hl-current { stroke: var(--text); stroke-width: 0.08; stroke-dasharray: 0.2 0.12; animation: march 1.2s linear infinite; }
@@ -230,6 +267,13 @@ button.wide { width: 100%; }
 .board.compact .map-route, .board.compact .map-ocean-names { opacity: 0.6; }
 .board.tiny .parcel-label .art { display: none; }
 .board.tiny .map-route { display: none; }
+.legend-lines { font-size: calc(var(--cell) * 0.22); }
+.legend-lines svg { width: 1.6em; height: 0.6em; margin-right: 0.25em; vertical-align: 0; overflow: visible; }
+.legend-lines path, .trip-group h4 path { fill: none; stroke-width: 1.6; }
+.legend-lines .key-route { stroke: var(--route); stroke-dasharray: 2.4 1.8; }
+.legend-lines .key-lane { stroke: var(--lane); stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 0.01 4; }
+.legend-lines .arc-medium, .trip-group .arc-medium { stroke-dasharray: 6 3; }
+.legend-lines .arc-long, .trip-group .arc-long { stroke-width: 2; stroke-dasharray: 8 2.5 2 2.5; }
 .board-center {
   position: absolute;
   left: calc(var(--cell) * var(--tx));
@@ -254,8 +298,17 @@ button.wide { width: 100%; }
 .dice { display: flex; gap: 8px; }
 .dice span { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line); font-weight: 700; font-size: 18px; }
 .actions { display: grid; gap: 8px; }
-.fly { display: flex; gap: 8px; }
-.fly select { flex: 1; min-width: 0; }
+.travel-panel { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.travel-panel p { margin: 0; }
+.trip-group { display: grid; gap: 4px; }
+.trip-group h4 { margin: 2px 0 0; font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.trip-group h4 svg { width: 24px; height: 8px; overflow: visible; }
+.trip { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; text-align: left; padding: 6px 10px; font-size: 13.5px; }
+.trip strong { white-space: nowrap; }
+.route-list { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+.lap-meter { display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap; }
+.lap-meter .bar { width: 64px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; flex: none; }
+.lap-meter .bar i { display: block; height: 100%; background: var(--good); }
 .event { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); }
 .event p { margin: 4px 0 0; font-size: 13.5px; }
 .event-good { border-color: var(--good); }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import layout from '../data/layout.json';
 import sectionsJson from '../data/sections.json';
-import { BOARD, SECTIONS } from '../src/engine/data';
-import { AIRPORTS, createGame } from '../src/engine/game';
+import { BOARD, FLIGHTS, RULES, SEA_ROUTES, SECTIONS } from '../src/engine/data';
+import { AIRPORTS, SEAPORTS, createGame, flightBand, seaRoutesFrom } from '../src/engine/game';
 import { validGameState } from '../src/net/protocol';
 
 type P = number[];
@@ -188,11 +188,75 @@ describe('world-map board: the route', () => {
   });
 });
 
-describe('saved games from before the territory map', () => {
-  it('are rejected: square indices changed meaning when the order inside sections began to follow the map', () => {
+describe('saved games from before seaports and lap income', () => {
+  it('are rejected: version 4 added seaports, sea routes, flight bands and lap income', () => {
     const s = createGame([{ name: 'A', roleId: 'entrepreneur', isBot: false }, { name: 'B', roleId: 'banker', isBot: true }], 1);
-    expect(s.version).toBe(3);
+    expect(s.version).toBe(4);
     expect(validGameState(s, 2)).toBe(true);
-    expect(validGameState({ ...s, version: 2 }, 2)).toBe(false);
+    expect(validGameState({ ...s, version: 3 }, 2)).toBe(false);
+    expect(validGameState({ ...s, canSail: undefined }, 2)).toBe(false);
+    expect(validGameState({ ...s, players: s.players.map((p) => ({ ...p, lapProgress: -1 })) }, 2)).toBe(false);
+  });
+});
+
+describe('seaports, sea routes and flight bands', () => {
+  it('turns the 5 old highways into seaports at the same squares', () => {
+    expect(SEAPORTS).toEqual([16, 48, 80, 112, 143]);
+    expect(SEAPORTS.map((i) => BOARD[i].name)).toEqual(['East China Port', 'Baltic Port', 'North Atlantic Port', 'South Atlantic Port', 'Coral Sea Port']);
+    for (const i of SEAPORTS) {
+      expect(BOARD[i].id).toMatch(/^port-/);
+      expect(BOARD[i].price).toBe(RULES.seaports.price);
+      expect(squares[i].kind).toBe('sea');
+    }
+    expect(BOARD.some((q) => (q.type as string) === 'highway')).toBe(false);
+  });
+
+  it('joins seaports only, both ends different, every port on at least two routes', () => {
+    expect(SEA_ROUTES.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(SEA_ROUTES.map((r) => r.id)).size).toBe(SEA_ROUTES.length);
+    const pairs = new Set<string>();
+    for (const r of SEA_ROUTES) {
+      expect(BOARD[r.a].type, r.id).toBe('seaport');
+      expect(BOARD[r.b].type, r.id).toBe('seaport');
+      expect(r.a).not.toBe(r.b);
+      const key = [r.a, r.b].sort((x, y) => x - y).join('-');
+      expect(pairs.has(key), `${r.id} duplicates another route`).toBe(false);
+      pairs.add(key);
+    }
+    for (const p of SEAPORTS) expect(seaRoutesFrom(p).length, BOARD[p].name).toBeGreaterThanOrEqual(2);
+    // A ring through all five ports in board order.
+    SEAPORTS.forEach((p, i) => expect(seaRoutesFrom(p).some((r) => r.dest === SEAPORTS[(i + 1) % SEAPORTS.length]), BOARD[p].name).toBe(true));
+  });
+
+  it('draws every route as a lane from one port to the other that stays at sea', () => {
+    const lanes = layout.seaRoutes as { id: string; from: string; to: string; path: P[] }[];
+    expect(lanes.map((l) => l.id)).toEqual(SEA_ROUTES.map((r) => r.id));
+    const land = [...Object.values(regions).flat()];
+    for (const l of lanes) {
+      const r = SEA_ROUTES.find((x) => x.id === l.id)!;
+      expect([l.from, l.to]).toEqual([BOARD[r.a].id, BOARD[r.b].id]);
+      expect(l.path[0]).toEqual([squares[r.a].label.x, squares[r.a].label.y]);
+      expect(l.path[l.path.length - 1]).toEqual([squares[r.b].label.x, squares[r.b].label.y]);
+      // On a playable region (where the territories are) for at most a short strait.
+      const onLand = l.path.filter((p) => land.some((poly) => inside(p, poly))).length;
+      expect(onLand / l.path.length, l.id).toBeLessThan(0.04);
+      for (const [x, y] of l.path) expect(x >= 0 && y >= 0 && y <= layout.height && x <= layout.width + 2, l.id).toBe(true);
+    }
+  });
+
+  it('has exactly one flight band per pair of airports, the same both ways, ordered by distance', () => {
+    expect(FLIGHTS).toHaveLength((AIRPORTS.length * (AIRPORTS.length - 1)) / 2);
+    const bands = RULES.airports.flightBands;
+    for (const f of FLIGHTS) {
+      expect(f.a).toBeLessThan(f.b);
+      expect(AIRPORTS).toContain(f.a);
+      expect(AIRPORTS).toContain(f.b);
+      const band = bands.find((b) => b.maxKm === null || f.km <= b.maxKm)!;
+      expect(f.band).toBe(band.id);
+      expect(flightBand(f.a, f.b).id).toBe(f.band);
+      expect(flightBand(f.b, f.a).id).toBe(f.band);
+    }
+    for (const b of bands) expect(FLIGHTS.filter((f) => f.band === b.id).length, b.id).toBeGreaterThanOrEqual(4);
+    expect(bands.map((b) => b.fare)).toEqual([...bands.map((b) => b.fare)].sort((x, y) => x - y));
   });
 });

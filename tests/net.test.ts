@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIRPORTS, createGame, endTurn as engineEndTurn, roll as engineRoll, buy as engineBuy, sectionCities, square } from '../src/engine/game';
+import { AIRPORTS, SEAPORTS, createGame, endTurn as engineEndTurn, roll as engineRoll, buy as engineBuy, sectionCities, square } from '../src/engine/game';
 import { botStep } from '../src/engine/bot';
 import type { GameState } from '../src/engine/types';
 import {
@@ -114,6 +114,12 @@ describe('protocol', () => {
       { t: 'intent', intent: { type: 'sell', index: 144 } },
       { t: 'intent', intent: { type: 'fly', dest: '5' } },
       { t: 'intent', intent: { type: 'fly', dest: null } },
+      { t: 'intent', intent: { type: 'sail', dest: '16' } },
+      { t: 'intent', intent: { type: 'sail', dest: null } },
+      { t: 'intent', intent: { type: 'sail', dest: -1 } },
+      { t: 'intent', intent: { type: 'sail', dest: 144 } },
+      { t: 'intent', intent: { type: 'sail', dest: 16.5 } },
+      { t: 'intent', intent: { type: 'sail' } },
       { t: 'intent', intent: { type: 'teleport' } },
       { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 1, give: [1], get: [], cash: 0.5 } } },
       { t: 'intent', intent: { type: 'proposeTrade', offer: { from: 0, to: 9, give: [1], get: [], cash: 0 } } },
@@ -173,11 +179,12 @@ describe('protocol', () => {
     expect(parseMessage({ t: 'snapshot', snapshot: legacy })).toBeNull();
     const lobby = { ...JSON.parse(JSON.stringify(createTable('0123456789abcdef', 'Hana'))), pendingTrades: [{ id: 1, offer }] };
     expect(parseMessage({ t: 'snapshot', snapshot: lobby })).toBeNull();
-    expect(PROTOCOL_VERSION).toBe(3);
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 
   it('returns clean copies without extra fields', () => {
     expect(parseIntent({ type: 'build', index: 3, extra: 'x' })).toEqual({ type: 'build', index: 3 });
+    expect(parseIntent({ type: 'sail', dest: 143, via: 'x' })).toEqual({ type: 'sail', dest: 143 });
     expect(parseMessage({ t: 'hello', v: 1, key: 'K'.repeat(26), name: '  Ann  ' })).toEqual({ t: 'hello', v: 1, key: 'K'.repeat(26), name: 'Ann' });
   });
 
@@ -800,7 +807,7 @@ describe('sessions', () => {
       { type: 'roll' }, { type: 'finish' }, { type: 'endTurn' }, { type: 'cancelTrade' },
       { type: 'respondTrade', tradeId: host.snapshot!.rev, accept: true },
       { type: 'proposeTrade', offer: { from: 0, to: 1, give: [], get: [1], cash: 0 } },
-      { type: 'build', index: 1 }, { type: 'sell', index: 1 }, { type: 'fly', dest: AIRPORTS[1] },
+      { type: 'build', index: 1 }, { type: 'sell', index: 1 }, { type: 'fly', dest: AIRPORTS[1] }, { type: 'sail', dest: SEAPORTS[1] },
     ];
     for (const intent of intents) evil.send({ t: 'intent', intent });
     for (const op of [{ op: 'name', name: 'Zed' }, { op: 'release' }, { op: 'claim', seat: 1 }, { op: 'role', roleId: 'banker' }]) evil.send({ t: 'lobby', op });
@@ -886,6 +893,32 @@ describe('sessions', () => {
     await flush();
     expect(game(gus).players[1].position).toBe(AIRPORTS[2]);
     expect(game(gus).canFly).toBe(false);
+    expectInSync(host, [gus]);
+  });
+
+  it('sails over the wire: only the current player, only along a route, once a turn', async () => {
+    const { host, gus } = await startedGame();
+    host.send({ type: 'roll' });
+    await flush();
+    const g = game(host);
+    const [port, linked] = [SEAPORTS[3], SEAPORTS[4]]; // South Atlantic -> Coral Sea (Cape Route)
+    const unlinked = SEAPORTS[1]; // Baltic: no route from the South Atlantic
+    Object.assign(g.players[0], { position: port, cash: 5000 });
+    Object.assign(g, { phase: 'action', canFly: false, canSail: true });
+    gus.send({ type: 'sail', dest: linked });
+    await flush();
+    expect(gus.lastRejection).toBe('It is not your turn');
+    host.send({ type: 'sail', dest: unlinked });
+    await flush();
+    expect(host.lastRejection).toBe('no sea route there');
+    host.send({ type: 'sail', dest: linked });
+    await flush();
+    expect(game(gus).players[0].position).toBe(linked);
+    expect(game(gus).players[0].cash).toBe(5000 - 75);
+    expect(game(gus).canSail).toBe(false);
+    host.send({ type: 'sail', dest: port });
+    await flush();
+    expect(host.lastRejection).toBe('cannot sail now');
     expectInSync(host, [gus]);
   });
 

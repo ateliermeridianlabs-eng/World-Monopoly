@@ -3,9 +3,13 @@ import sectionsJson from '../../data/sections.json';
 import rulesJson from '../../data/rules.json';
 import rolesJson from '../../data/roles.json';
 import cardsJson from '../../data/cards.json';
-import type { Card, Role, Section, Square } from './types';
+import type { Card, Flight, Role, SeaRoute, Section, Square } from './types';
 
 export const BOARD: Square[] = boardJson.squares as Square[];
+/** Every pair of airports with its fare band (generated from the map). */
+export const FLIGHTS: Flight[] = boardJson.flights as Flight[];
+/** Shipping routes between seaports; each runs both ways. */
+export const SEA_ROUTES: SeaRoute[] = boardJson.seaRoutes as SeaRoute[];
 export const SECTIONS: Section[] = sectionsJson.sections as Section[];
 export const RULES = rulesJson;
 export const ROLES: Role[] = rolesJson.roles as Role[];

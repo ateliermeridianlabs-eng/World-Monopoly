@@ -4,12 +4,12 @@
 
 import { BOARD, RULES, sectionById } from '../engine/data';
 import {
-  AIRPORTS, HOTEL, activePlayers, canBuild, cityRent, costOfLiving, currentPlayer, flightFare, incomeTaxRate, levelOf, money, netWorth,
-  ownedBy, ownerOf, roleOf, square, tierOf, validateTrade,
+  AIRPORTS, HOTEL, SIZE, activePlayers, canBuild, cityRent, costOfLiving, currentPlayer, flightBand, flightFare, incomeTaxRate, lapIncome, levelOf,
+  money, netWorth, ownedBy, ownerOf, roleOf, sailFare, seaRoutesFrom, square, tierOf, transportMultiplier, validateTrade,
 } from '../engine/game';
-import type { GameState, TradeOffer } from '../engine/types';
+import type { GameState, Player, TradeOffer } from '../engine/types';
 import type { Intent, PendingTrade, Seat, SessionStatus } from '../net';
-import { MAP, boardPosition, mapOverSvg, mapUnderSvg, territoryKind, territoryPath, tileArt, tileIcon } from './tiles';
+import { LANES, MAP, arcPath, boardPosition, labelPoint, mapOverSvg, mapUnderSvg, seaName, territoryKind, territoryPath, tileArt, tileIcon } from './tiles';
 import { store } from './store';
 
 export const app = document.getElementById('app')!;
@@ -217,6 +217,7 @@ function mountGame() {
         <defs>${BOARD.map((sq) => `<clipPath id="tc${sq.index}"><path d="${territoryPath(sq.index)}"/></clipPath>`).join('')}</defs>
         <g class="owner-rims"></g>
         ${mapOverSvg()}
+        <g class="travel"></g>
         <path class="hl hl-current"/><path class="hl hl-selected"/><path class="hl hl-focus"/>
       </svg>` +
     BOARD.map((sq) => {
@@ -234,13 +235,25 @@ function mountGame() {
     `<div class="board-center" style="--tx:${t.x};--ty:${t.y};--tw:${t.w};--th:${t.h}">
       <h2>World Monopoly</h2>
       <div class="legend">${[...sectionById.values()].map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>
+      <div class="legend legend-lines">
+        <span><svg viewBox="0 0 24 8" aria-hidden="true"><path class="key-route" d="M1 4H23"/></svg>Play order</span>
+        <span><svg viewBox="0 0 24 8" aria-hidden="true"><path class="key-lane" d="M1 4H23"/></svg>⚓ Sea route</span>
+        <span><svg viewBox="0 0 24 8" aria-hidden="true"><path class="arc arc-short" d="M1 4H23"/></svg>✈️ Short</span>
+        <span><svg viewBox="0 0 24 8" aria-hidden="true"><path class="arc arc-medium" d="M1 4H23"/></svg>Medium</span>
+        <span><svg viewBox="0 0 24 8" aria-hidden="true"><path class="arc arc-long" d="M1 4H23"/></svg>Long-haul</span>
+      </div>
       <p class="muted">Tap any territory for details.</p>
     </div></div>`;
 
   const choose = (el: Element | null) => {
     const tile = el?.closest<SVGElement>('[data-tile]');
     if (!tile) return;
-    selected = Number(tile.dataset.tile);
+    const index = Number(tile.dataset.tile);
+    // A highlighted flight or sea destination: go there (the panel lists the same trips as buttons).
+    const s = ctl?.game();
+    const trip = s && ctl?.canAct() ? travelOptions(s).find((t) => t.dest === index) : undefined;
+    if (trip) return perform({ type: trip.kind, dest: trip.dest }, true);
+    selected = index;
     update(false);
   };
   board.addEventListener('click', (e) => choose(e.target as Element));
@@ -355,8 +368,85 @@ function renderBoardState(s: GameState) {
   if (rims) rims.innerHTML = Object.entries(s.owners)
     .map(([i]) => `<path d="${territoryPath(Number(i))}" clip-path="url(#tc${i})" stroke="${esc(ownerOf(s, Number(i))?.color ?? 'transparent')}"/>`)
     .join('');
+  renderTravel(s);
   document.querySelector('.hl-current')?.setAttribute('d', territoryPath(cur));
   document.querySelector('.hl-selected')?.setAttribute('d', selected === null ? '' : territoryPath(selected));
+}
+
+// ---------- travel (flights and sea routes) ----------
+
+interface Trip {
+  kind: 'fly' | 'sail';
+  dest: number;
+  fare: number;
+  /** Flights: short, medium or long. */
+  band?: { id: string; name: string };
+  /** Sailing: the route taken. */
+  route?: { id: string; name: string };
+}
+
+/** Trips open to the current player right now: every other airport after landing on one, or each sea route's far end after landing on a seaport. */
+function travelOptions(s: GameState): Trip[] {
+  if (s.phase !== 'action') return [];
+  const here = currentPlayer(s).position;
+  if (s.canFly && square(here).type === 'airport') {
+    return AIRPORTS.filter((a) => a !== here).map((a) => ({ kind: 'fly' as const, dest: a, fare: flightFare(s, a), band: flightBand(here, a) }));
+  }
+  if (s.canSail && square(here).type === 'seaport') {
+    return seaRoutesFrom(here).map(({ route, dest }) => ({ kind: 'sail' as const, dest, fare: sailFare(s, dest), route }));
+  }
+  return [];
+}
+
+/** Map overlay: flight arcs styled by band, or the open sea lanes picked out; destination territories outlined with their fare. */
+function renderTravel(s: GameState) {
+  const layer = document.querySelector('.travel');
+  const lanes = document.querySelector('.map-lanes');
+  if (!layer) return;
+  const trips = travelOptions(s);
+  const open = new Set(trips.filter((t) => t.route).map((t) => t.route!.id));
+  lanes?.classList.toggle('dim', open.size > 0);
+  lanes?.querySelectorAll<SVGGElement>('[data-lane]').forEach((g) => g.classList.toggle('open', open.has(g.dataset.lane!)));
+  document.querySelectorAll<SVGElement>('[data-tile]').forEach((t) => t.classList.toggle('dest', trips.some((x) => x.dest === Number(t.dataset.tile))));
+  const here = currentPlayer(s).position;
+  const arcs = trips.filter((t) => t.kind === 'fly')
+    // Long arcs first, so shorter ones stay on top.
+    .sort((a, b) => order(b.band!.id) - order(a.band!.id))
+    .map((t) => `<path class="arc arc-${t.band!.id}" d="${arcPath(here, t.dest)}"/>`).join('');
+  // Open lanes again on top of the territories, so the way out of the port shows.
+  const sea = trips.filter((t) => t.route).map((t) => `<path class="lane-open" d="${LANES.find((l) => l.id === t.route!.id)!.d}"/>`).join('');
+  const badges = trips.map((t) => {
+    const p = labelPoint(t.dest);
+    const text = money(t.fare);
+    const w = 0.2 + text.length * 0.17;
+    return `<g class="fare fare-${t.band?.id ?? 'sea'}" transform="translate(${p.x} ${p.y - Math.min(p.r, 1) - 0.1})"><rect x="${-w / 2}" y="-0.24" width="${w}" height="0.48" rx="0.24"/><text>${text}</text></g>`;
+  }).join('');
+  const outlines = trips.map((t) => `<path class="dest-ring" d="${territoryPath(t.dest)}"/>`).join('');
+  layer.innerHTML = trips.length ? `<g class="arcs">${sea}${arcs}</g>${outlines}${badges}` : '';
+}
+
+const BAND_ORDER = ['short', 'medium', 'long'];
+const order = (band: string) => BAND_ORDER.indexOf(band);
+
+/** Panel: trips as buttons (flights grouped by band), with a hint that the map works too. */
+function travelPanel(s: GameState, trips: Trip[], p: Player) {
+  if (!trips.length) return '';
+  const button = (t: Trip) => {
+    const owner = ownerOf(s, t.dest);
+    const where = t.kind === 'fly' ? `${esc(square(t.dest).name)} <span class="muted">${esc(seaName(t.dest))}</span>` : `${esc(square(t.dest).name)} <span class="muted">${esc(t.route!.name)}</span>`;
+    const ownerNote = owner ? (owner.id === p.id ? ' · yours' : ` · to ${esc(owner.name)}`) : '';
+    return `<button class="trip" data-trip="${t.kind}:${t.dest}" ${p.cash < t.fare ? 'disabled' : ''}>
+        <span>${where}</span><strong>${money(t.fare)}<span class="small muted">${ownerNote}</span></strong></button>`;
+  };
+  if (trips[0].kind === 'fly') {
+    const groups = RULES.airports.flightBands.map((b) => {
+      const list = trips.filter((t) => t.band!.id === b.id);
+      if (!list.length) return '';
+      return `<div class="trip-group"><h4><svg viewBox="0 0 24 8" aria-hidden="true"><path class="arc arc-${b.id}" d="M1 4H23"/></svg>${esc(b.name)} <span class="muted">from ${money(b.fare)}</span></h4>${list.map(button).join('')}</div>`;
+    }).join('');
+    return `<div class="travel-panel"><p class="small"><strong>✈️ Fly</strong> once to any airport. Tap a lit airport on the map or a button. Flying skips lap-income progress.</p>${groups}</div>`;
+  }
+  return `<div class="travel-panel"><p class="small"><strong>⚓ Sail</strong> once along a sea route. Tap a lit port on the map or a button. Sailing skips lap-income progress.</p><div class="trip-group">${trips.map(button).join('')}</div></div>`;
 }
 
 function renderBanner() {
@@ -374,7 +464,6 @@ function renderPanel(s: GameState) {
   const p = currentPlayer(s);
   const over = s.phase === 'gameOver';
   const can = c.canAct();
-  const here = square(p.position);
   const buying = s.pendingBuy !== null ? square(s.pendingBuy) : null;
   const frozen = !!room && room.status !== 'connected' && !over;
   const spectating = !!room && room.selfSeat === null;
@@ -393,13 +482,7 @@ function renderPanel(s: GameState) {
   } else {
     actions = `
       ${buying ? `<button class="primary wide" data-act="buy" ${p.cash < buying.price! ? 'disabled' : ''}>Buy ${esc(buying.name)} for ${money(buying.price!)}</button>` : ''}
-      ${s.canFly && here.type === 'airport' ? `
-        <div class="fly">
-          <select data-fly aria-label="Destination airport">
-            ${AIRPORTS.filter((a) => a !== p.position).map((a) => `<option value="${a}">${esc(square(a).name)} · ${nearbySection(a)} · ${money(flightFare(s, a))}</option>`).join('')}
-          </select>
-          <button data-act="fly">✈️ Fly</button>
-        </div>` : ''}
+      ${travelPanel(s, travelOptions(s), p)}
       <button class="primary wide" data-act="end">End turn</button>`;
   }
 
@@ -455,7 +538,6 @@ function renderPanel(s: GameState) {
       ${room.networkError ? `<p class="small muted">${esc(room.networkError)}</p>` : ''}
     </div>` : '';
 
-  const flyBefore = panel.querySelector<HTMLSelectElement>('[data-fly]')?.value;
   const top = panel.scrollTop;
   panel.innerHTML = `
     <header class="turn" style="--who:${esc(p.color)}">
@@ -478,7 +560,8 @@ function renderPanel(s: GameState) {
             <strong>${esc(pl.name)}</strong> <span class="muted small">${esc(roleOf(pl).name)}${pl.isBot ? ' · bot' : ''}</span> ${seatTags(pl.id)}
             <div class="small">${pl.bankrupt ? 'Bankrupt' : `Cash ${money(pl.cash)} · Worth ${money(netWorth(s, pl))} · ${ownedBy(s, pl.id).length} props`}
               ${pl.skipNextTurn ? ' · misses next turn' : ''}${pl.skipAirportIncome ? ' · flight delayed' : ''}</div>
-            ${!pl.bankrupt ? `<div class="small muted">${roleOf(pl).noSalary ? 'No salary' : `Income tax ${Math.round(incomeTaxRate(s, pl) * 100)}%`} · Living ${money(costOfLiving(s, pl))}/turn · Lap ${pl.laps}</div>` : ''}
+            ${!pl.bankrupt ? `<div class="small muted">${roleOf(pl).noSalary ? 'No salary' : `Income tax ${Math.round(incomeTaxRate(s, pl) * 100)}%`} · Living ${money(costOfLiving(s, pl))}/turn · Lap ${pl.laps}</div>
+            ${lapMeter(pl)}` : ''}
             ${canHandOver(pl.id) ? (confirming === `bot:${pl.id}`
               ? confirmHtml(`Hand ${esc(pl.name)}'s seat to a bot? This changes the game for everyone. ${esc(pl.name)} gets the seat back by reconnecting.`, 'Hand to bot')
               : `<button class="ghost small" data-botseat="${pl.id}">Hand to bot</button>`) : ''}
@@ -489,8 +572,6 @@ function renderPanel(s: GameState) {
     <ul class="log">${s.log.slice(-40).reverse().map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
     <div class="row footer-actions">${footer}</div>`;
   panel.scrollTop = top;
-  const flySelect = panel.querySelector<HTMLSelectElement>('[data-fly]');
-  if (flySelect && flyBefore && [...flySelect.options].some((o) => o.value === flyBefore)) flySelect.value = flyBefore;
   toast = '';
 
   const on = (act: string, fn: () => void) => panel.querySelector(`[data-act="${act}"]`)?.addEventListener('click', fn);
@@ -498,7 +579,10 @@ function renderPanel(s: GameState) {
   on('roll', () => act({ type: 'roll' }, true));
   on('buy', () => act({ type: 'buy' }));
   on('end', () => act({ type: 'endTurn' }, true));
-  on('fly', () => act({ type: 'fly', dest: Number(panel.querySelector<HTMLSelectElement>('[data-fly]')!.value) }, true));
+  panel.querySelectorAll<HTMLButtonElement>('[data-trip]').forEach((b) => b.addEventListener('click', () => {
+    const [kind, dest] = b.dataset.trip!.split(':');
+    act({ type: kind as 'fly' | 'sail', dest: Number(dest) }, true);
+  }));
   on('trade', () => openTrade());
   on('cancel-trade', () => act({ type: 'cancelTrade' }));
   on('finish', () => (room ? ask('finish') : act({ type: 'finish' })));
@@ -541,9 +625,14 @@ function perform(intent: Intent, selectAfterAction = false) {
   update();
 }
 
-function nearbySection(airport: number) {
-  for (let i = airport; i >= 0; i--) if (BOARD[i].section) return esc(sectionById.get(BOARD[i].section!)!.name);
-  return '';
+/** Progress toward the next lap income: squares walked since the last New Year and what New Year would pay now. */
+function lapMeter(p: Player) {
+  const walked = Math.min(p.lapProgress, SIZE);
+  const pct = Math.round((walked / SIZE) * 100);
+  return `<div class="lap-meter small" title="Lap income at the next New Year: ${money(RULES.lapIncome.amount)} x squares walked / ${SIZE}">
+      <span class="bar" role="progressbar" aria-label="Lap income progress" aria-valuemin="0" aria-valuemax="${SIZE}" aria-valuenow="${walked}"><i style="width:${pct}%"></i></span>
+      <span>New Year pays <strong>${money(lapIncome(p))}</strong> <span class="muted">(${walked}/${SIZE} walked)</span></span>
+    </div>`;
 }
 
 function detail(s: GameState, index: number, human: boolean) {
@@ -571,14 +660,33 @@ function detail(s: GameState, index: number, human: boolean) {
     body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
       <p class="small">Earns ${money(RULES.utilities.feePerHouse)} per house and ${money(RULES.utilities.feePerHotel)} per hotel anyone else builds in ${esc(section!.name)}.${RULES.utilities.requiresCityInSection ? ' Only active while the owner has a city in this section.' : ''}</p>`;
   } else if (sq.type === 'airport') {
+    const bonus = owner ? transportMultiplier(s, owner, 'airport') : 1;
+    const flights = RULES.airports.flightBands.map((b) => {
+      const to = AIRPORTS.filter((a) => a !== index && flightBand(index, a).id === b.id);
+      return to.length ? `<li><strong>${esc(b.name)}</strong> ${money(b.fare)}: ${to.map((a) => `${esc(square(a).name)} <span class="muted">(${esc(seaName(a))})</span>`).join(', ')}</li>` : '';
+    }).join('');
     body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
-      <p class="small">Landing fee ${money(RULES.airports.landingFee)}, flight fare ${money(RULES.airports.flightFare)}, +${RULES.airports.bonusPerExtraAirport * 100}% per extra airport the owner has.</p>`;
+      <p>Landing fee <strong>${money(Math.round(RULES.airports.landingFee * bonus))}</strong>${bonus > 1 ? ` <span class="muted">(+${Math.round((bonus - 1) * 100)}% for ${esc(owner!.name)}'s other airports)</span>` : ''}</p>
+      <p class="small">Land here by dice to fly once to any other airport. Flights to or from here, base fare (paid to the destination airport's owner, or the bank):</p>
+      <ul class="small route-list">${flights}</ul>
+      <p class="small muted">+${RULES.airports.bonusPerExtraAirport * 100}% on fees and fares per extra airport the owner has. Diplomats pay half.</p>`;
+  } else if (sq.type === 'seaport') {
+    const bonus = owner ? transportMultiplier(s, owner, 'seaport') : 1;
+    const routes = seaRoutesFrom(index).map(({ route, dest }) => {
+      const destOwner = ownerOf(s, dest);
+      const fare = destOwner ? Math.round(RULES.seaports.sailFare * transportMultiplier(s, destOwner, 'seaport')) : RULES.seaports.sailFare;
+      return `<li><strong>${esc(route.name)}</strong> to ${esc(square(dest).name)} · ${money(fare)}${destOwner ? ` to ${esc(destOwner.name)}` : ''}</li>`;
+    }).join('');
+    body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
+      <p>Docking fee <strong>${money(Math.round(RULES.seaports.dockingFee * bonus))}</strong>${bonus > 1 ? ` <span class="muted">(+${Math.round((bonus - 1) * 100)}% for ${esc(owner!.name)}'s other ports)</span>` : ''}</p>
+      <p class="small">Land here by dice to sail once along a route:</p>
+      <ul class="small route-list">${routes}</ul>
+      <p class="small muted">Fares go to the destination port's owner, or the bank. +${RULES.seaports.bonusPerExtraSeaport * 100}% per extra seaport the owner has. Diplomats pay half.</p>`;
   } else {
     const text: Record<string, string> = {
-      newYear: `Salary checkpoint and lap marker. Each lap: pay ${RULES.propertyTax.percentOfPropertyValue}% property tax; Bankers earn interest.`,
+      newYear: `Salary checkpoint and lap marker. Reaching or passing it pays lap income: ${money(RULES.lapIncome.amount)} x squares walked since the last one / ${SIZE} (flights and sailing do not count). Then pay ${RULES.propertyTax.percentOfPropertyValue}% property tax; Bankers earn interest.`,
       event: 'Draw a World Event card.',
       disaster: section ? `Regional disaster: ${section.disasters.join(' or ')}. Damages buildings in ${section.name}.` : '',
-      highway: 'Safe zone. Nothing happens.',
       tax: `Pay ${money(RULES.taxSquare.amount)}.`,
     };
     body = `<p class="small">${esc(text[sq.type] ?? '')}</p>`;

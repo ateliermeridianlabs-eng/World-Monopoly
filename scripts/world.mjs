@@ -328,16 +328,36 @@ export const BACKDROP = [
  * The last crossing is two single zones: Highway 5 in the Coral Sea, New Year by the date line east of Japan.
  */
 export const CROSSINGS = [
-  { name: 'East China Sea', at: [61.2, 20.8], rx: 2.2, ry: 1.6, rot: 120, seed: 1 },
-  { name: 'Sea of Japan', at: [64.5, 14.0], rx: 2.2, ry: 1.6, rot: 0, seed: 2 },
-  { name: 'Baltic Sea', at: [43.2, 4.7], rx: 2.6, ry: 2.0, rot: 0, seed: 3 },
-  { name: 'North Sea', at: [32.2, 6.0], rx: 2.4, ry: 1.6, rot: 90, seed: 4 },
-  { name: 'North Atlantic', at: [19.0, 6.5], rx: 2.4, ry: 1.8, rot: 0, seed: 5 },
-  { name: 'Caribbean', at: [14.4, 20.1], rx: 2.6, ry: 1.5, rot: 20, seed: 6 },
-  { name: 'South Atlantic', at: [23.4, 31.2], rx: 2.6, ry: 1.8, rot: 0, seed: 7 },
-  { name: 'Indian Ocean', at: [47.5, 33.0], rx: 3.2, ry: 2.0, rot: 0, seed: 8 },
-  { name: 'Coral Sea', at: [71.6, 29.6], rx: 2.2, ry: 1.6, rot: -60, seed: 9, squares: 1 },
-  { name: 'Date line', at: [75.7, 15.0], rx: 3.0, ry: 1.3, rot: 90, seed: 10, squares: 1 },
+  { name: 'East China Sea', at: [61.2, 20.8], rx: 2.2, ry: 1.6, rot: 120, seed: 1, lonLat: [125.5, 29.0], port: 'East China Port' },
+  { name: 'Sea of Japan', at: [64.5, 14.0], rx: 2.2, ry: 1.6, rot: 0, seed: 2, lonLat: [135.0, 40.0] },
+  { name: 'Baltic Sea', at: [43.2, 4.7], rx: 2.6, ry: 2.0, rot: 0, seed: 3, lonLat: [19.5, 58.0], port: 'Baltic Port' },
+  { name: 'North Sea', at: [32.2, 6.0], rx: 2.4, ry: 1.6, rot: 90, seed: 4, lonLat: [3.0, 56.0] },
+  { name: 'North Atlantic', at: [19.0, 6.5], rx: 2.4, ry: 1.8, rot: 0, seed: 5, lonLat: [-38.0, 50.0], port: 'North Atlantic Port' },
+  { name: 'Caribbean', at: [14.4, 20.1], rx: 2.6, ry: 1.5, rot: 20, seed: 6, lonLat: [-75.0, 15.0] },
+  { name: 'South Atlantic', at: [23.4, 31.2], rx: 2.6, ry: 1.8, rot: 0, seed: 7, lonLat: [-15.0, -15.0], port: 'South Atlantic Port' },
+  { name: 'Indian Ocean', at: [47.5, 33.0], rx: 3.2, ry: 2.0, rot: 0, seed: 8, lonLat: [80.0, -20.0] },
+  { name: 'Coral Sea', at: [71.6, 29.6], rx: 2.2, ry: 1.6, rot: -60, seed: 9, squares: 1, lonLat: [155.0, -18.0], port: 'Coral Sea Port' },
+  { name: 'Date line', at: [75.7, 15.0], rx: 3.0, ry: 1.3, rot: 90, seed: 10, squares: 1, lonLat: [180.0, 30.0] },
+];
+// lonLat: a real point in that sea, for the great-circle flight distances (flight bands). port: the name of the
+// crossing's seaport (the squares that were highways), if it has one.
+
+// ---------- sea routes ----------
+
+/**
+ * Fixed shipping lanes between seaports (by crossing name). Every route runs both ways. `via` are map-cell
+ * waypoints the lane must pass, in order from `from` to `to`; between them scripts/generate-layout.mjs finds the
+ * cheapest way by sea (land costs a lot, so a lane only cuts land at a strait), smooths it and stores it in
+ * data/layout.json. Points past the right edge (x > 78) are open water off the map: the Northern Sea Route leaves
+ * through the Bering Strait at the top right and comes back into the Pacific east of Japan.
+ */
+export const SEA_ROUTES = [
+  { id: 'northern-sea-route', name: 'Northern Sea Route', from: 'Baltic Sea', to: 'East China Sea', via: [[45.0, 1.2], [58.0, 0.35], [70, 0.7], [78.6, 1.4], [78.6, 9.6], [76.6, 11.2], [74.6, 21.6], [66.4, 27.0]] },
+  { id: 'transatlantic', name: 'Transatlantic Route', from: 'Baltic Sea', to: 'North Atlantic', via: [] },
+  { id: 'mid-atlantic', name: 'Mid-Atlantic Route', from: 'North Atlantic', to: 'South Atlantic', via: [] },
+  { id: 'cape-route', name: 'Cape Route', from: 'South Atlantic', to: 'Coral Sea', via: [] },
+  { id: 'pacific-route', name: 'Western Pacific Route', from: 'Coral Sea', to: 'East China Sea', via: [] },
+  { id: 'indian-ocean-route', name: 'Indian Ocean Route', from: 'East China Sea', to: 'South Atlantic', via: [] },
 ];
 
 // ---------- decoration ----------

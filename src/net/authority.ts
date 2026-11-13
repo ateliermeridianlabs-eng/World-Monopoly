@@ -5,7 +5,7 @@
 
 import { ROLES, RULES } from '../engine/data';
 import { botAcceptsTrade, botStep } from '../engine/bot';
-import { build, buy, createGame, endGameByNetWorth, endTurn, executeTrade, fly, roll, sellBuilding, validateTrade } from '../engine/game';
+import { build, buy, createGame, endGameByNetWorth, endTurn, executeTrade, fly, roll, sail, sellBuilding, validateTrade } from '../engine/game';
 import type { GameState, PlayerSetup } from '../engine/types';
 import { NAME_MAX, cleanName } from './protocol';
 import type { Intent, LobbyOp, Seat, Snapshot } from './protocol';
@@ -200,6 +200,7 @@ const TURN_ACTIONS: Record<string, (g: GameState, i: Intent) => void> = {
   build: (g, i) => build(g, (i as { index: number }).index),
   sell: (g, i) => sellBuilding(g, (i as { index: number }).index),
   fly: (g, i) => fly(g, (i as { dest: number }).dest),
+  sail: (g, i) => sail(g, (i as { dest: number }).dest),
   endTurn: (g) => endTurn(g),
 };
 

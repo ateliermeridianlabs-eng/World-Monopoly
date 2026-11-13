@@ -1,5 +1,5 @@
 {
-  "_note": "World Event deck. effect.type is read by the engine. Visa denied no longer sends to jail (jail was removed); it now sends you back to the nearest airport behind you.",
+  "_note": "World Event deck. effect.type is read by the engine. Visa denied no longer sends to jail (jail was removed); it now sends you back to the nearest airport behind you. Moves forward along the track (Remote work, Rerouted, Advance to New Year, Freighter) count toward lap income; moves back do not.",
   "worldEvents": [
     { "id": "startup-exit", "name": "Startup exit", "kind": "good", "text": "Your startup sold. Collect $150.", "effect": { "type": "gain", "amount": 150 } },
     { "id": "inheritance", "name": "Inheritance", "kind": "good", "text": "A distant relative left you $200.", "effect": { "type": "gain", "amount": 200 } },
@@ -15,7 +15,9 @@
     { "id": "natural-disaster", "name": "Natural disaster", "kind": "bad", "text": "Pay $50 for each city you own in this section.", "effect": { "type": "payPerCityInSection", "amount": 50 } },
     { "id": "visa-denied", "name": "Visa denied", "kind": "bad", "text": "Go back to the nearest airport behind you.", "effect": { "type": "backToAirport" } },
     { "id": "nearest-airport", "name": "Rerouted", "kind": "neutral", "text": "Advance to the nearest airport. If owned, pay double the landing fee.", "effect": { "type": "nearestAirport", "feeMultiplier": 2 } },
-    { "id": "advance-new-year", "name": "Advance to New Year", "kind": "neutral", "text": "Advance to New Year and collect salary on the way.", "effect": { "type": "advanceTo", "square": 0 } },
+    { "id": "advance-new-year", "name": "Advance to New Year", "kind": "neutral", "text": "Advance to New Year. Collect salary and lap income on the way.", "effect": { "type": "advanceTo", "square": 0 } },
+    { "id": "freighter", "name": "Hitch a ride on a freighter", "kind": "neutral", "text": "Advance to the nearest seaport. If owned, pay double the docking fee.", "effect": { "type": "nearestSeaport", "feeMultiplier": 2 } },
+    { "id": "canal-blocked", "name": "Canal blocked", "kind": "bad", "text": "A ship is stuck in the canal. Pay $100 for each seaport you own.", "effect": { "type": "payPerSeaport", "amount": 100 } },
     { "id": "go-back-3", "name": "Wrong turn", "kind": "neutral", "text": "Go back 3 spaces.", "effect": { "type": "move", "steps": -3 } },
     { "id": "swap-places", "name": "House swap", "kind": "neutral", "text": "Swap places with a random other player.", "effect": { "type": "swapPlaces" } }
   ]

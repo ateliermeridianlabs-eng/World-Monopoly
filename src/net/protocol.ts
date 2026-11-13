@@ -9,7 +9,8 @@ import type { GameState, TradeOffer } from '../engine/types';
 /** Bumped when the wire format changes; a host rejects guests with another version. */
 /** 2: `Snapshot.pendingTrade` became the list `pendingTrades`; trades are allowed at any time. */
 /** 3: square indices changed (squares are map territories; the order inside a section follows the map). */
-export const PROTOCOL_VERSION = 3;
+/** 4: `sail` intent; GameState v4 (seaports, `canSail`, players' `lapProgress`). */
+export const PROTOCOL_VERSION = 4;
 /** Same cap as the name inputs in the hot-seat UI. */
 export const NAME_MAX = 16;
 
@@ -25,6 +26,8 @@ export type Intent =
   | { type: 'sell'; index: number }
   /** Fly to another airport square (board index). */
   | { type: 'fly'; dest: number }
+  /** Sail along a sea route to the seaport at its other end (board index). */
+  | { type: 'sail'; dest: number }
   | { type: 'endTurn' }
   /** Any seated player offers a trade at any time (one outstanding offer each). `offer.from` must be the sender's seat. */
   | { type: 'proposeTrade'; offer: TradeOffer }
@@ -152,6 +155,8 @@ export function parseIntent(v: unknown): Intent | null {
       return isInt(v.index, 0, LAST_SQUARE) ? { type: v.type, index: v.index } : null;
     case 'fly':
       return isInt(v.dest, 0, LAST_SQUARE) ? { type: 'fly', dest: v.dest } : null;
+    case 'sail':
+      return isInt(v.dest, 0, LAST_SQUARE) ? { type: 'sail', dest: v.dest } : null;
     case 'proposeTrade': {
       const offer = parseOffer(v.offer);
       return offer ? { type: 'proposeTrade', offer } : null;
@@ -195,13 +200,13 @@ const isRecordOf = (v: unknown, valueOk: (x: unknown) => boolean) =>
 
 /** Structural check of a GameState, so a hostile "host" cannot crash a guest's renderer. */
 export function validGameState(v: unknown, playerCount: number): v is GameState {
-  if (!isObj(v) || v.version !== 3) return false;
+  if (!isObj(v) || v.version !== 4) return false;
   const players = v.players;
   if (!Array.isArray(players) || players.length !== playerCount) return false;
   const playersOk = players.every((p, i) =>
     isObj(p) && p.id === i && cleanName(p.name) === p.name && typeof p.color === 'string' && COLOR_RE.test(p.color) && isBool(p.isBot) &&
     typeof p.roleId === 'string' && roleById.has(p.roleId) && Number.isFinite(p.cash) && isInt(p.position, 0, LAST_SQUARE) &&
-    isInt(p.laps, 0, 1e6) && isBool(p.bankrupt) && isBool(p.skipNextTurn) && isBool(p.skipAirportIncome));
+    isInt(p.laps, 0, 1e6) && isInt(p.lapProgress, 0, 1e9) && isBool(p.bankrupt) && isBool(p.skipNextTurn) && isBool(p.skipAirportIncome));
   if (!playersOk) return false;
   const ev = v.lastEvent;
   return isRecordOf(v.owners, (x) => isInt(x, 0, playerCount - 1)) &&
@@ -211,7 +216,7 @@ export function validGameState(v: unknown, playerCount: number): v is GameState 
     isInt(v.turn, 1, 1e6) && isInt(v.roundLimit, 0, 1e6) &&
     (v.dice === null || isIntArray(v.dice, 1, RULES.dice.sides, RULES.dice.count)) &&
     (v.pendingBuy === null || isInt(v.pendingBuy, 0, LAST_SQUARE)) &&
-    isBool(v.canFly) &&
+    isBool(v.canFly) && isBool(v.canSail) &&
     (ev === null || (isObj(ev) && isStr(ev.title, MAX_TEXT) && isStr(ev.text, MAX_TEXT) && ['good', 'bad', 'neutral', 'disaster'].includes(ev.kind as string))) &&
     isIntArray(v.deck, 0, CARDS.length - 1, CARDS.length) &&
     isInt(v.rng, -(2 ** 31), 2 ** 31 - 1) &&

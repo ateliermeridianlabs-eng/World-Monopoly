@@ -1,7 +1,12 @@
 {
   "_note": "Every number here is an unverified placeholder. Change values here, not in code. Shared by the web build and the future Roblox port.",
-  "startingCash": 1500,
-  "roundLimit": { "default": 60, "_note": "Rounds before the richest player (net worth) wins. 0 = play until one player is left. 4-bot simulations run a median of about 230 rounds without a limit." },
+  "startingCash": 10000,
+  "lapIncome": {
+    "amount": 2000,
+    "roundDownTo": 10,
+    "_note": "Paid on reaching or passing New Year, before property tax and Banker interest. Prorated: amount x min(1, squares walked forward since the last payout / board size), rounded down to roundDownTo. Only forward moves along the track count (dice, cards that move you forward); flights, sailing, swaps and backward moves do not. The count resets at each payout and anything above one board length is not carried over."
+  },
+  "roundLimit": { "default": 60, "_note": "Rounds before the richest player (net worth) wins. 0 = play until one player is left. 4-bot simulations run a median of about 140 rounds without a limit." },
   "dice": { "count": 2, "sides": 6 },
   "players": { "min": 2, "max": 6 },
   "tiers": [
@@ -59,10 +64,22 @@
     "_requiresCityInSectionNote": "If true, a meter only earns fees while its owner owns at least one city in that section. Otherwise the fee goes to the bank."
   },
   "airports": {
-    "price": 200,
-    "landingFee": 25,
-    "flightFare": 50,
-    "bonusPerExtraAirport": 0.1
+    "price": 400,
+    "landingFee": 50,
+    "bonusPerExtraAirport": 0.1,
+    "flightBands": [
+      { "id": "short", "name": "Short-haul", "maxKm": 5500, "fare": 100 },
+      { "id": "medium", "name": "Medium-haul", "maxKm": 9000, "fare": 200 },
+      { "id": "long", "name": "Long-haul", "maxKm": null, "fare": 400 }
+    ],
+    "_flightBandsNote": "A flight's band comes from the great-circle distance between the two airports' seas (first band whose maxKm it fits). The band of every airport pair is generated into data/board.json flights."
+  },
+  "seaports": {
+    "price": 300,
+    "dockingFee": 50,
+    "bonusPerExtraSeaport": 0.1,
+    "sailFare": 75,
+    "_note": "Routes between seaports are in data/board.json seaRoutes (drawn in data/layout.json; authored in scripts/world.mjs)."
   },
   "disasters": {
     "destroyChance": 0.3,

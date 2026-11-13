@@ -1,7 +1,7 @@
 import { BOARD, PLAYER_COLORS, ROLES, RULES } from '../engine/data';
 import { botAcceptsTrade, botStep } from '../engine/bot';
 import {
-  build, buy, createGame, currentPlayer, endGameByNetWorth, endTurn, executeTrade, fly, money, roll, sellBuilding,
+  build, buy, createGame, currentPlayer, endGameByNetWorth, endTurn, executeTrade, fly, money, roll, sail, sellBuilding,
 } from '../engine/game';
 import type { GameState, PlayerSetup } from '../engine/types';
 import type { Controller } from './view';
@@ -24,7 +24,7 @@ function loadSave(): GameState | null {
   try {
     const raw = store.get(SAVE_KEY);
     const s = raw ? (JSON.parse(raw) as GameState) : null;
-    return s && s.version === 3 && s.phase !== 'gameOver' ? s : null;
+    return s && s.version === 4 && s.phase !== 'gameOver' ? s : null;
   } catch {
     return null;
   }
@@ -48,6 +48,7 @@ const local: Controller = {
       case 'build': return build(s, intent.index);
       case 'sell': return sellBuilding(s, intent.index);
       case 'fly': return fly(s, intent.dest);
+      case 'sail': return sail(s, intent.dest);
       case 'endTurn': return endTurn(s);
       case 'finish': return endGameByNetWorth(s);
       case 'proposeTrade': {
@@ -232,7 +233,7 @@ function renderSetup() {
         ${setupRows.length < RULES.players.max ? '<button data-act="add">+ Add player</button>' : ''}
         <label>Round limit <input type="number" min="0" max="999" value="${roundLimit}" data-limit /></label>
       </div>
-      <p class="muted small">Round limit 0 = play until one player is left (4-bot games run about 230 rounds). At the limit, highest net worth wins.</p>
+      <p class="muted small">Round limit 0 = play until one player is left (4-bot games run about 140 rounds). At the limit, highest net worth wins.</p>
       <button class="primary wide" data-act="start">Start game</button>
       <section class="online-card" aria-labelledby="online-h">
         <h2 id="online-h">Play online</h2>
@@ -249,12 +250,15 @@ function renderSetup() {
       <details class="rules">
         <summary>Rules in short</summary>
         <ul>
+          <li>Everyone starts with ${money(RULES.startingCash)} (some roles more or less).</li>
+          <li>Reaching or passing 🎆 New Year pays up to ${money(RULES.lapIncome.amount)} lap income: the full amount for a whole lap walked, less for squares skipped by plane or ship.</li>
           <li>Pass a ⭐ checkpoint (every 12 squares): collect ${money(RULES.salary.perCheckpoint)} salary minus income tax (10/18/25% by net worth).</li>
           <li>Every turn you pay cost of living (${money(RULES.costOfLiving.minimum)} minimum, more for pricier cities). Each New Year you pay ${RULES.propertyTax.percentOfPropertyValue}% property tax.</li>
           <li>No full set needed to build houses. Rent rises 10% for each extra square you own in that section (up to +110%). Hotels need all 8 cities of the section.</li>
           <li>Each section has Water, Gas, Electricity and WiFi meters. Anyone building there pays the meter owners a fee.</li>
-          <li>Airports: pay a landing fee to the owner, or pay a fare to fly to any other airport.</li>
-          <li>Highways are safe. World Event and Disaster squares draw cards. No jail.</li>
+          <li>✈️ Airports: pay a landing fee to the owner, then you may fly to any other airport: short-, medium- or long-haul fare (${RULES.airports.flightBands.map((b) => money(b.fare)).join(' / ')}).</li>
+          <li>⚓ Seaports: pay a docking fee to the owner, then you may sail one sea route to the port at its other end for ${money(RULES.seaports.sailFare)}.</li>
+          <li>World Event and Disaster squares draw cards. No jail.</li>
         </ul>
       </details>
     </main>`;
@@ -303,6 +307,9 @@ function renderSetup() {
   app.querySelector('[data-act="host-online"]')!.addEventListener('click', () => void startOnline({ kind: 'host' }));
   app.querySelector('[data-act="resume-host"]')?.addEventListener('click', () => void startOnline({ kind: 'resume' }));
 }
+
+// Dev server only (dropped from builds): lets a browser script inspect and stage the hot-seat game, e.g. put a token on an airport.
+if (import.meta.env.DEV) Object.assign(window, { __wm: { game: () => game, redraw: () => update() } });
 
 if (/(^|[#&])room=/.test(location.hash)) arriveFromLink();
 else renderSetup();
