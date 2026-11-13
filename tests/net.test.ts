@@ -132,6 +132,18 @@ describe('protocol', () => {
     expect(parseMessage(evil)).toBeNull();
   });
 
+  it('accepts only hex player colours in a snapshot (they reach inline styles)', () => {
+    const t = createTable('0123456789abcdef', 'Hana');
+    setSeat(t, 1, { kind: 'bot' });
+    startGame(t, 1);
+    expect(parseMessage({ t: 'snapshot', snapshot: JSON.parse(JSON.stringify(t)) })).not.toBeNull();
+    for (const color of ['red;background-image:url(https://x.example/t)', '"><img src=x onerror=alert(1)>', '#12345', '']) {
+      const bad = JSON.parse(JSON.stringify(t));
+      bad.game.players[0].color = color;
+      expect(parseMessage({ t: 'snapshot', snapshot: bad })).toBeNull();
+    }
+  });
+
   it('returns clean copies without extra fields', () => {
     expect(parseIntent({ type: 'build', index: 3, extra: 'x' })).toEqual({ type: 'build', index: 3 });
     expect(parseMessage({ t: 'hello', v: 1, key: 'K'.repeat(26), name: '  Ann  ' })).toEqual({ t: 'hello', v: 1, key: 'K'.repeat(26), name: 'Ann' });
@@ -598,6 +610,152 @@ describe('sessions', () => {
     await flush();
     expect(host.snapshot!.seats[1].name).toBe('Gus');
     expect(loadHostSave(throwing)).toBeNull();
+  });
+
+  it('leaves state untouched for every refused request from a raw seated peer', async () => {
+    const { host, hub } = await setup([]);
+    const evil = hub.connect('evil');
+    const inbox: { t: string; reason?: string }[] = [];
+    evil.onMessage((m) => inbox.push(m as { t: string }));
+    await flush();
+    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'lobby', op: { op: 'claim', seat: 0 } }); // the host's seat
+    evil.send({ t: 'lobby', op: { op: 'claim', seat: 5 } }); // no such seat
+    evil.send({ t: 'lobby', op: { op: 'claim', seat: 1 } });
+    await flush();
+    expect(host.snapshot!.seats.map((s) => s.name)).toEqual(['Hana', 'Eve']);
+    host.start();
+    await flush();
+    const before = JSON.stringify(host.snapshot);
+    const intents = [
+      { type: 'roll' }, { type: 'finish' }, { type: 'endTurn' }, { type: 'cancelTrade' },
+      { type: 'respondTrade', tradeId: host.snapshot!.rev, accept: true },
+      { type: 'proposeTrade', offer: { from: 0, to: 1, give: [], get: [1], cash: 0 } },
+      { type: 'build', index: 1 }, { type: 'sell', index: 1 }, { type: 'fly', dest: AIRPORTS[1] },
+    ];
+    for (const intent of intents) evil.send({ t: 'intent', intent });
+    for (const op of [{ op: 'name', name: 'Zed' }, { op: 'release' }, { op: 'claim', seat: 1 }, { op: 'role', roleId: 'banker' }]) evil.send({ t: 'lobby', op });
+    await flush();
+    expect(JSON.stringify(host.snapshot)).toBe(before);
+    expect(inbox.filter((m) => m.t === 'reject')).toHaveLength(intents.length + 4 + 2); // + the two refused claims
+  });
+
+  it('accepts a trade answer once, and never for a withdrawn offer', async () => {
+    const { host, gus } = await startedGame();
+    host.send({ type: 'roll' });
+    await flush();
+    expect(game(host).phase).toBe('action');
+    const [a, b, c] = sectionCities('africa');
+    Object.assign(game(host).owners, { [a]: 0, [b]: 1, [c]: 1 });
+    host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [a], get: [b], cash: 0 } });
+    const first = host.snapshot!.pendingTrade!.id;
+    host.send({ type: 'cancelTrade' });
+    host.send({ type: 'proposeTrade', offer: { from: 0, to: 1, give: [a], get: [c], cash: 0 } });
+    const second = host.snapshot!.pendingTrade!.id;
+    expect(second).not.toBe(first);
+    await flush();
+    const seen: (string | undefined)[] = [];
+    gus.subscribe((r) => r && seen.push(r));
+    gus.send({ type: 'respondTrade', tradeId: first, accept: true });
+    gus.send({ type: 'respondTrade', tradeId: second, accept: true });
+    gus.send({ type: 'respondTrade', tradeId: second, accept: true });
+    await flush();
+    expect(game(host).owners[b]).toBe(1);
+    expect(game(host).owners[c]).toBe(0);
+    expect(game(host).owners[a]).toBe(1);
+    expect(seen).toEqual(['That trade is no longer on the table', 'That trade is no longer on the table']);
+  });
+
+  it('marks the old identity away when a connection says hello with another key', async () => {
+    const { host, hub } = await setup([]);
+    const evil = hub.connect('evil');
+    await flush();
+    evil.send({ t: 'hello', v: 1, key: 'E'.repeat(26), name: 'Eve' });
+    evil.send({ t: 'lobby', op: { op: 'claim', seat: 1 } });
+    await flush();
+    expect(host.snapshot!.seats[1]).toMatchObject({ name: 'Eve', connected: true });
+    evil.send({ t: 'hello', v: 1, key: 'F'.repeat(26), name: 'Fay' });
+    await flush();
+    expect(host.snapshot!.seats[1].connected).toBe(false);
+    for (let i = 0; i < 50; i++) evil.send({ t: 'hello', v: 1, key: `K${String(i).padStart(20, '0')}`, name: 'X' });
+    await flush();
+    expect((host as unknown as { helloNames: Map<string, string> }).helloNames.size).toBe(1); // bounded per connection
+  });
+
+  it('builds, sells and flies over the wire', async () => {
+    const { host, gus } = await startedGame();
+    host.send({ type: 'roll' });
+    await flush();
+    host.send({ type: 'endTurn' });
+    await flush();
+    expect(game(host).current).toBe(1);
+    // Setup on the host only: Gus owns a city, stands on an airport and may fly.
+    const g = game(host);
+    const [city] = sectionCities('africa');
+    g.owners[city] = 1;
+    gus.send({ type: 'build', index: city });
+    await flush();
+    expect(gus.lastRejection).toBe('Roll first');
+    g.phase = 'action';
+    g.players[1].position = AIRPORTS[0];
+    g.players[1].cash = 5000;
+    g.canFly = true;
+    gus.send({ type: 'build', index: city });
+    await flush();
+    expect(gus.lastRejection).toBe('Roll first'); // unchanged: no new rejection
+    expect(game(gus).levels[city]).toBe(1);
+    gus.send({ type: 'sell', index: city });
+    await flush();
+    expect(game(gus).levels[city] ?? 0).toBe(0);
+    gus.send({ type: 'sell', index: city });
+    await flush();
+    expect(gus.lastRejection).toBe('cannot sell here');
+    gus.send({ type: 'fly', dest: AIRPORTS[0] });
+    await flush();
+    expect(gus.lastRejection).toBe('bad destination');
+    gus.send({ type: 'fly', dest: AIRPORTS[2] });
+    await flush();
+    expect(game(gus).players[1].position).toBe(AIRPORTS[2]);
+    expect(game(gus).canFly).toBe(false);
+    expectInSync(host, [gus]);
+  });
+
+  it('ends the game at the round limit, refuses further intents, and lets a spectator arrive mid-game', async () => {
+    const { host, gus, ivy, hub } = await startedGame(2);
+    const clients = [host, gus, ivy];
+    for (let i = 0; i < 6; i++) await playStep(host, clients);
+    const late = joinSession({ transport: hub.connect('late'), roomCode: ROOM, name: 'Lou', storage: fakeStorage() });
+    await flush();
+    expect(late.selfSeat).toBeNull();
+    expect(late.snapshot).toEqual(host.snapshot);
+    late.claimSeat(1);
+    await flush();
+    expect(late.lastRejection).toBe('The game has already started');
+    let steps = 0;
+    while (game(host).phase !== 'gameOver' && steps++ < 200) await playStep(host, clients);
+    expect(game(host).phase).toBe('gameOver');
+    expect(game(host).log).toContain('Round limit (2) reached.');
+    expect(game(host).winner).not.toBeNull();
+    expect(host.snapshot!.phase).toBe('playing'); // the room stays on the final board
+    const rev = host.snapshot!.rev;
+    host.send({ type: 'finish' });
+    gus.send({ type: 'roll' });
+    await flush();
+    expect(host.lastRejection).toBe('The game is over');
+    expect(gus.lastRejection).toBe('The game is over');
+    expect(host.snapshot!.rev).toBe(rev);
+    expectInSync(host, [gus, ivy, late]);
+  });
+
+  it('keeps a finished game in the host save so a reload of the room can resume it', async () => {
+    const { host, hostStore } = await startedGame();
+    host.send({ type: 'finish' });
+    await flush();
+    expect(game(host).phase).toBe('gameOver');
+    expect(loadHostSave(hostStore)).toBeNull(); // not offered on the main menu
+    expect(loadHostSave(hostStore, true)?.snapshot.game?.phase).toBe('gameOver');
+    host.leave(); // "New game" / "Leave game"
+    expect(loadHostSave(hostStore, true)).toBeNull();
   });
 
   it('keeps the snapshot small enough for one message', async () => {

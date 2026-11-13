@@ -93,6 +93,7 @@ Known limits:
 - Two tabs in the same browser count as the same player. Use a private window to test as two players.
 - A spectator cannot join mid-game as a player.
 
+## Layout
 
 | Path | What |
 | --- | --- |

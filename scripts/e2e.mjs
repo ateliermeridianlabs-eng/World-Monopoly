@@ -314,6 +314,15 @@ try {
   await guest.waitForSelector('.panel');
   check((await guest.locator('.room-bar').innerText()).includes(code), 'resuming brings the hosted room back');
 
+  // ---- game over, then a reload of #room=CODE keeps hosting the finished room (not "Connecting…" as a guest of itself)
+  await guest.click('[data-act="finish"]');
+  await guest.click('[data-act="confirm-yes"]');
+  await guest.waitForSelector('[data-act="new"]');
+  check(/wins with/.test(await guest.locator('.winner').innerText()), 'ending the game online shows the winner');
+  await guest.reload();
+  await until(async () => (await has(guest, '[data-act="new"]')) || (await has(guest, '.room-code')), 'page back after reload');
+  check(await has(guest, '[data-act="new"]'), 'host reload after game over still shows the final board');
+
   // ---- leave goes back to setup
   await guest.click('[data-act="quit"]');
   check(/pauses for everyone/.test(await guest.locator('.confirm').innerText()), "host's leave confirm says the game pauses for everyone");

@@ -90,14 +90,14 @@ function clientKey(st: ReturnType<typeof store>) {
 
 /**
  * The unfinished game this browser was hosting, if any (validated; finished games are ignored like
- * the hot-seat autosave). Rejoin `roomCode` and pass `snapshot` to `hostSession({ resume })`.
+ * the hot-seat autosave, unless `includeFinished`). Rejoin `roomCode` and pass `snapshot` to `hostSession({ resume })`.
  */
-export function loadHostSave(storage?: StorageLike | null): HostSave | null {
+export function loadHostSave(storage?: StorageLike | null, includeFinished = false): HostSave | null {
   try {
     const raw = JSON.parse(store(storage).get(HOST_SAVE_KEY) ?? 'null');
     const roomCode = normalizeRoomCode(raw?.roomCode ?? '');
     const snapshot = parseSnapshot(raw?.snapshot);
-    return roomCode && snapshot && snapshot.game?.phase !== 'gameOver' ? { roomCode, snapshot } : null;
+    return roomCode && snapshot && (includeFinished || snapshot.game?.phase !== 'gameOver') ? { roomCode, snapshot } : null;
   } catch {
     return null;
   }
@@ -453,9 +453,16 @@ export class Session {
     if (msg.t === 'hello') {
       if (msg.v !== PROTOCOL_VERSION) return send({ t: 'reject', reason: 'The host runs a different version of the game. Reload the page.' });
       const id = clientIdFromKey(msg.key);
+      const prev = this.peerClients.get(from);
       this.peerClients.set(from, id);
       this.helloNames.set(id, msg.name);
-      if (setConnected(this.snap, id, true).ok) this.commit();
+      // Same connection, different key: the old identity is gone unless another connection still has it.
+      let away = false;
+      if (prev !== undefined && prev !== id && ![...this.peerClients.values()].includes(prev)) {
+        this.helloNames.delete(prev);
+        away = setConnected(this.snap, prev, false).ok;
+      }
+      if (setConnected(this.snap, id, true).ok || away) this.commit();
       else send(this.snapshotMsg());
       return;
     }

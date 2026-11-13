@@ -113,6 +113,8 @@ const MAX_SEATS = RULES.players.max;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const KEY_RE = /^[A-Za-z0-9]{16,64}$/;
 const ID_RE = /^[0-9a-f]{16}$/;
+/** Player colours end up in inline styles, so only plain hex colours are accepted. */
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const MAX_TEXT = 4000;
 
 /** Trims a display name; returns null when empty, longer than NAME_MAX, or containing control characters. */
@@ -195,7 +197,7 @@ export function validGameState(v: unknown, playerCount: number): v is GameState 
   const players = v.players;
   if (!Array.isArray(players) || players.length !== playerCount) return false;
   const playersOk = players.every((p, i) =>
-    isObj(p) && p.id === i && cleanName(p.name) === p.name && isStr(p.color, 32) && isBool(p.isBot) &&
+    isObj(p) && p.id === i && cleanName(p.name) === p.name && typeof p.color === 'string' && COLOR_RE.test(p.color) && isBool(p.isBot) &&
     typeof p.roleId === 'string' && roleById.has(p.roleId) && Number.isFinite(p.cash) && isInt(p.position, 0, LAST_SQUARE) &&
     isInt(p.laps, 0, 1e6) && isBool(p.bankrupt) && isBool(p.skipNextTurn) && isBool(p.skipAirportIncome));
   if (!playersOk) return false;

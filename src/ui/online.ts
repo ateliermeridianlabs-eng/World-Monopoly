@@ -83,7 +83,8 @@ export async function enter(req: OnlineRequest, env: OnlineEnv): Promise<string 
     code = parseRoomInput(req.input);
     if (!code) return 'That is not a valid room code or invite link.';
     // A reload of the host's own page lands here with #room=CODE: continue hosting instead of joining yourself.
-    const save = loadHostSave(uiStorage);
+    // Finished games count too, or a host reloading the final screen would wait forever as a guest of itself.
+    const save = loadHostSave(uiStorage, true);
     if (save?.roomCode === code) resume = save;
   }
 
