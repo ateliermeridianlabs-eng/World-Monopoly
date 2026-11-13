@@ -1,6 +1,6 @@
-import { BOARD, CARDS, PLAYER_COLORS, RULES, roleById, sectionById } from './data';
+import { BOARD, CARDS, FLIGHTS, PLAYER_COLORS, RULES, SEA_ROUTES, roleById, sectionById } from './data';
 import { nextRandom, randomInt, shuffle } from './rng';
-import type { Card, GameState, Player, PlayerSetup, Role, Square, TradeOffer } from './types';
+import type { Card, Flight, GameState, Player, PlayerSetup, Role, SeaRoute, Square, TradeOffer } from './types';
 
 const SIZE = BOARD.length;
 const HOTEL = RULES.building.maxHousesBeforeHotel + 1;
@@ -16,6 +16,8 @@ for (const sq of BOARD) {
   map.get(sq.section)!.push(sq.index);
 }
 const AIRPORTS = BOARD.filter((s) => s.type === 'airport').map((s) => s.index);
+const SEAPORTS = BOARD.filter((s) => s.type === 'seaport').map((s) => s.index);
+const flightByPair = new Map<string, Flight>(FLIGHTS.map((f) => [`${Math.min(f.a, f.b)}-${Math.max(f.a, f.b)}`, f]));
 
 export const money = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
 
@@ -37,13 +39,14 @@ export function createGame(setups: PlayerSetup[], seed = Date.now(), roundLimit 
       cash: RULES.startingCash + (role.startingCashDelta ?? 0),
       position: 0,
       laps: 0,
+      lapProgress: 0,
       bankrupt: false,
       skipNextTurn: false,
       skipAirportIncome: false,
     };
   });
   const state: GameState = {
-    version: 1,
+    version: 4,
     players,
     owners: {},
     levels: {},
@@ -54,6 +57,7 @@ export function createGame(setups: PlayerSetup[], seed = Date.now(), roundLimit 
     dice: null,
     pendingBuy: null,
     canFly: false,
+    canSail: false,
     lastEvent: null,
     deck: [],
     rng: seed | 0,
@@ -120,15 +124,40 @@ export function cityRent(s: GameState, index: number) {
   return owner ? Math.round(raw * (1 + sectionBonus(s, owner, sq.section!))) : raw;
 }
 
-function airportMultiplier(s: GameState, owner: Player) {
-  const n = AIRPORTS.filter((i) => s.owners[i] === owner.id).length;
-  return 1 + RULES.airports.bonusPerExtraAirport * Math.max(0, n - 1);
+/** Owner bonus on fees and fares at an airport or seaport: +bonus for each other square of that type the owner has. */
+export function transportMultiplier(s: GameState, owner: Player, type: 'airport' | 'seaport') {
+  const own = (type === 'airport' ? AIRPORTS : SEAPORTS).filter((i) => s.owners[i] === owner.id).length;
+  const bonus = type === 'airport' ? RULES.airports.bonusPerExtraAirport : RULES.seaports.bonusPerExtraSeaport;
+  return 1 + bonus * Math.max(0, own - 1);
 }
 
-export function airportFee(s: GameState, index: number, payer: Player, base: number) {
+/** A fee or fare of `base` at airport/seaport `index`, paid by `payer`: owner bonus, then the payer's role discount. */
+export function travelFee(s: GameState, index: number, payer: Player, base: number) {
   const owner = ownerOf(s, index);
-  const mult = owner ? airportMultiplier(s, owner) : 1;
-  return Math.round(base * mult * (roleOf(payer).airportFeeMultiplier ?? 1));
+  const type = square(index).type === 'seaport' ? 'seaport' : 'airport';
+  const mult = owner ? transportMultiplier(s, owner, type) : 1;
+  return Math.round(base * mult * (roleOf(payer).travelFeeMultiplier ?? 1));
+}
+
+/** The flight between two airports (its band and distance). */
+export function flightBetween(a: number, b: number): Flight {
+  const f = flightByPair.get(`${Math.min(a, b)}-${Math.max(a, b)}`);
+  if (!f) throw new Error('bad destination');
+  return f;
+}
+
+export const flightBand = (a: number, b: number) => RULES.airports.flightBands.find((x) => x.id === flightBetween(a, b).band)!;
+
+/** Sea routes from seaport `from`, each with the port at its other end. */
+export function seaRoutesFrom(from: number): { route: SeaRoute; dest: number }[] {
+  return SEA_ROUTES.filter((r) => r.a === from || r.b === from).map((route) => ({ route, dest: route.a === from ? route.b : route.a }));
+}
+
+/** Lap income a player would get at New Year now: amount x min(1, lapProgress / board size), rounded down. */
+export function lapIncome(p: Player) {
+  const l = RULES.lapIncome;
+  const share = Math.min(1, p.lapProgress / SIZE);
+  return Math.floor((l.amount * share) / l.roundDownTo) * l.roundDownTo;
 }
 
 /** Multiplier on build fees a meter owner earns. */
@@ -261,6 +290,7 @@ function finish(s: GameState, winner: Player) {
   s.winner = winner.id;
   s.pendingBuy = null;
   s.canFly = false;
+  s.canSail = false;
   log(s, `🏆 ${winner.name} wins.`);
 }
 
@@ -273,8 +303,14 @@ function payCheckpoint(s: GameState, p: Player) {
   log(s, `${p.name} collected ${money(net)} salary (${Math.round(rate * 100)}% income tax).`);
 }
 
+/** Every way of reaching or passing New Year goes through move(), which calls this. */
 function newYear(s: GameState, p: Player) {
+  const income = lapIncome(p);
+  const walked = Math.min(p.lapProgress, SIZE);
+  p.lapProgress = 0;
   p.laps += 1;
+  receive(p, income);
+  log(s, `${p.name} collected ${money(income)} lap income (${walked} of ${SIZE} squares walked).`);
   const role = roleOf(p);
   if (role.interestRate && p.cash > (role.interestAbove ?? 0)) {
     const interest = Math.round((p.cash - (role.interestAbove ?? 0)) * role.interestRate);
@@ -287,7 +323,10 @@ function newYear(s: GameState, p: Player) {
   pay(s, p, tax, null, 'property tax');
 }
 
-/** Moves forward (paying every checkpoint passed) or backward (paying nothing). */
+/**
+ * Moves along the track: forward (each square counts toward lap income; pays every checkpoint and New Year
+ * passed) or backward (pays and counts nothing). The only way to reach New Year.
+ */
 function move(s: GameState, p: Player, steps: number) {
   if (steps < 0) {
     p.position = (p.position + steps + SIZE * 10) % SIZE;
@@ -295,6 +334,7 @@ function move(s: GameState, p: Player, steps: number) {
   }
   for (let k = 0; k < steps && !p.bankrupt; k++) {
     p.position = (p.position + 1) % SIZE;
+    p.lapProgress += 1;
     const sq = square(p.position);
     if (sq.checkpoint) payCheckpoint(s, p);
     if (p.position === 0) newYear(s, p);
@@ -305,10 +345,16 @@ function moveTo(s: GameState, p: Player, target: number) {
   move(s, p, (target - p.position + SIZE) % SIZE);
 }
 
+/** Airport landing fee or seaport docking fee for landing on `index`. */
 function landingFee(s: GameState, p: Player, index: number, multiplier = 1) {
   const owner = ownerOf(s, index);
   if (!owner || owner.id === p.id) return;
-  const fee = airportFee(s, index, p, RULES.airports.landingFee) * multiplier;
+  const port = square(index).type === 'seaport';
+  const fee = travelFee(s, index, p, port ? RULES.seaports.dockingFee : RULES.airports.landingFee) * multiplier;
+  if (port) {
+    pay(s, p, fee, owner, `docking fee at ${square(index).name}`);
+    return;
+  }
   if (owner.skipAirportIncome) {
     owner.skipAirportIncome = false;
     log(s, `${owner.name}'s airport income was skipped (flight delayed).`);
@@ -324,12 +370,14 @@ function resolveLanding(s: GameState, p: Player, depth = 0) {
   switch (sq.type) {
     case 'city':
     case 'utility':
-    case 'airport': {
+    case 'airport':
+    case 'seaport': {
       const owner = ownerOf(s, sq.index);
       if (!owner) s.pendingBuy = sq.index;
       else if (owner.id !== p.id && sq.type === 'city') pay(s, p, cityRent(s, sq.index), owner, `rent in ${sq.name}`);
-      else if (sq.type === 'airport') landingFee(s, p, sq.index);
+      else if (sq.type === 'airport' || sq.type === 'seaport') landingFee(s, p, sq.index);
       if (sq.type === 'airport') s.canFly = true;
+      if (sq.type === 'seaport') s.canSail = true;
       break;
     }
     case 'tax':
@@ -399,6 +447,19 @@ function drawCard(s: GameState, p: Player, depth: number) {
       s.canFly = true;
       break;
     }
+    case 'nearestSeaport': {
+      const ahead = SEAPORTS.map((a) => ({ a, d: (a - p.position + SIZE) % SIZE })).filter((x) => x.d > 0).sort((x, y) => x.d - y.d)[0];
+      move(s, p, ahead.d);
+      if (p.bankrupt) break;
+      log(s, `${p.name} landed on ${square(p.position).name}.`);
+      if (!ownerOf(s, p.position)) s.pendingBuy = p.position;
+      else landingFee(s, p, p.position, e.feeMultiplier);
+      s.canSail = true;
+      break;
+    }
+    case 'payPerSeaport':
+      pay(s, p, e.amount * SEAPORTS.filter((i) => s.owners[i] === p.id).length, null, card.name);
+      break;
     case 'advanceTo':
       moveTo(s, p, e.square);
       break;
@@ -502,17 +563,19 @@ export function sellBuilding(s: GameState, index: number) {
   log(s, `${p.name} sold a building in ${square(index).name} for ${money(refund)}.`);
 }
 
-export function flightFare(s: GameState, dest: number) {
+/** Fare for the current player to fly from `from` (default: where they stand) to airport `dest`: the band's fare, owner bonus, role discount; free into their own airport. */
+export function flightFare(s: GameState, dest: number, from = currentPlayer(s).position) {
   const p = currentPlayer(s);
   const owner = ownerOf(s, dest);
   if (owner?.id === p.id) return 0;
-  return airportFee(s, dest, p, RULES.airports.flightFare);
+  return travelFee(s, dest, p, flightBand(from, dest).fare);
 }
 
 export function fly(s: GameState, dest: number) {
   const p = currentPlayer(s);
   if (s.phase !== 'action' || !s.canFly || square(p.position).type !== 'airport') throw new Error('cannot fly now');
-  if (square(dest).type !== 'airport' || dest === p.position) throw new Error('bad destination');
+  if (square(dest)?.type !== 'airport' || dest === p.position) throw new Error('bad destination');
+  const band = flightBand(p.position, dest);
   const fare = flightFare(s, dest);
   if (p.cash < fare) throw new Error('not enough cash');
   const owner = ownerOf(s, dest);
@@ -525,8 +588,34 @@ export function fly(s: GameState, dest: number) {
   }
   p.position = dest;
   s.canFly = false;
+  s.canSail = false;
   s.pendingBuy = ownerOf(s, dest) ? null : dest;
-  log(s, `✈️ ${p.name} flew to ${square(dest).name}.`);
+  log(s, `✈️ ${p.name} flew ${band.name.toLowerCase()} to ${square(dest).name}.`);
+}
+
+/** Fare for the current player to sail to seaport `dest`: sailFare, owner bonus, role discount; free into their own port. */
+export function sailFare(s: GameState, dest: number) {
+  const p = currentPlayer(s);
+  const owner = ownerOf(s, dest);
+  if (owner?.id === p.id) return 0;
+  return travelFee(s, dest, p, RULES.seaports.sailFare);
+}
+
+/** Sails along a sea route from the seaport the current player landed on to the port at its other end. Arrival works like a flight's. */
+export function sail(s: GameState, dest: number) {
+  const p = currentPlayer(s);
+  if (s.phase !== 'action' || !s.canSail || square(p.position).type !== 'seaport') throw new Error('cannot sail now');
+  const way = seaRoutesFrom(p.position).find((r) => r.dest === dest);
+  if (!way) throw new Error('no sea route there');
+  const fare = sailFare(s, dest);
+  if (p.cash < fare) throw new Error('not enough cash');
+  const owner = ownerOf(s, dest);
+  pay(s, p, fare, owner && owner.id !== p.id ? owner : null, `${way.route.name} to ${square(dest).name}`);
+  p.position = dest;
+  s.canSail = false;
+  s.canFly = false;
+  s.pendingBuy = ownerOf(s, dest) ? null : dest;
+  log(s, `⚓ ${p.name} sailed the ${way.route.name} to ${square(dest).name}.`);
 }
 
 export function endTurn(s: GameState) {
@@ -537,6 +626,7 @@ export function endTurn(s: GameState) {
 function advance(s: GameState) {
   s.pendingBuy = null;
   s.canFly = false;
+  s.canSail = false;
   for (let guard = 0; guard < s.players.length * 2; guard++) {
     s.current = (s.current + 1) % s.players.length;
     if (s.current === 0) {
@@ -568,11 +658,14 @@ export function endGameByNetWorth(s: GameState) {
 
 // ---------- trading ----------
 
+/** Pure and independent of whose turn it is or the phase; only a finished game refuses trades. */
 export function validateTrade(s: GameState, t: TradeOffer): string | null {
+  if (s.phase === 'gameOver') return 'The game is over';
   const from = s.players[t.from];
   const to = s.players[t.to];
   if (!from || !to || from.id === to.id || from.bankrupt || to.bankrupt) return 'Pick another player';
   if (!t.give.length && !t.get.length) return 'Trade must include at least one property';
+  if (!Number.isInteger(t.cash)) return 'Cash must be a whole number';
   if (t.give.some((i) => s.owners[i] !== from.id)) return `${from.name} does not own all offered properties`;
   if (t.get.some((i) => s.owners[i] !== to.id)) return `${to.name} does not own all requested properties`;
   if (t.cash > 0 && from.cash < t.cash) return `${from.name} cannot afford ${money(t.cash)}`;
@@ -593,4 +686,4 @@ export function executeTrade(s: GameState, t: TradeOffer) {
   log(s, `🤝 ${from.name} traded ${names(t.give)}${t.cash > 0 ? ` + ${money(t.cash)}` : ''} to ${to.name} for ${names(t.get)}${t.cash < 0 ? ` + ${money(-t.cash)}` : ''}.`);
 }
 
-export { AIRPORTS, HOTEL, SIZE };
+export { AIRPORTS, HOTEL, SEAPORTS, SIZE };

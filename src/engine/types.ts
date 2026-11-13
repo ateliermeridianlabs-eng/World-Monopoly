@@ -1,4 +1,4 @@
-export type SquareType = 'newYear' | 'city' | 'utility' | 'event' | 'disaster' | 'airport' | 'highway' | 'tax';
+export type SquareType = 'newYear' | 'city' | 'utility' | 'event' | 'disaster' | 'airport' | 'seaport' | 'tax';
 
 export interface Square {
   index: number;
@@ -10,6 +10,24 @@ export interface Square {
   price?: number;
   image?: string | null;
   utility?: string;
+}
+
+export type FlightBandId = 'short' | 'medium' | 'long';
+
+/** One pair of airports (a < b) from data/board.json; the band and fare are the same both ways. */
+export interface Flight {
+  a: number;
+  b: number;
+  km: number;
+  band: FlightBandId;
+}
+
+/** A shipping route between two seaports (data/board.json); it runs both ways. */
+export interface SeaRoute {
+  id: string;
+  name: string;
+  a: number;
+  b: number;
 }
 
 export interface City {
@@ -37,7 +55,8 @@ export interface Role {
   interestRate?: number;
   interestAbove?: number;
   propertyTaxMultiplier?: number;
-  airportFeeMultiplier?: number;
+  /** Multiplies airport landing fees, flight fares, seaport docking fees and sea fares this player pays. */
+  travelFeeMultiplier?: number;
   sectionBonusCap?: number;
   buildCostMultiplier?: number;
   utilityFeeMultiplier?: number;
@@ -57,6 +76,8 @@ export type CardEffect =
   | { type: 'payPerCityInSection'; amount: number }
   | { type: 'backToAirport' }
   | { type: 'nearestAirport'; feeMultiplier: number }
+  | { type: 'nearestSeaport'; feeMultiplier: number }
+  | { type: 'payPerSeaport'; amount: number }
   | { type: 'advanceTo'; square: number }
   | { type: 'move'; steps: number }
   | { type: 'swapPlaces' };
@@ -84,6 +105,8 @@ export interface Player {
   cash: number;
   position: number;
   laps: number;
+  /** Squares walked forward since the last lap income (only dice and forward card moves count). */
+  lapProgress: number;
   bankrupt: boolean;
   skipNextTurn: boolean;
   skipAirportIncome: boolean;
@@ -98,7 +121,8 @@ export interface LastEvent {
 }
 
 export interface GameState {
-  version: 1;
+  /** Bumped when saved games become incompatible (2: board reordered into a trip around the world; 3: squares became map territories, order inside a section follows the map; 4: lap income, seaports and sea routes, flight bands). Older saves are ignored. */
+  version: 4;
   players: Player[];
   /** square index -> player id */
   owners: Record<number, number>;
@@ -111,7 +135,10 @@ export interface GameState {
   roundLimit: number;
   dice: number[] | null;
   pendingBuy: number | null;
+  /** The current player ended their move on an airport this turn and has not flown yet. */
   canFly: boolean;
+  /** The current player ended their move on a seaport this turn and has not sailed yet. */
+  canSail: boolean;
   lastEvent: LastEvent | null;
   deck: number[];
   rng: number;

@@ -1,51 +1,187 @@
-import { BOARD, PLAYER_COLORS, ROLES, RULES, sectionById } from '../engine/data';
+import { BOARD, PLAYER_COLORS, ROLES, RULES } from '../engine/data';
 import { botAcceptsTrade, botStep } from '../engine/bot';
 import {
-  AIRPORTS, HOTEL, activePlayers, build, buy, canBuild, cityRent, costOfLiving, createGame, currentPlayer, endGameByNetWorth,
-  endTurn, executeTrade, flightFare, fly, incomeTaxRate, levelOf, money, netWorth, ownedBy, ownerOf, roleOf, roll, sellBuilding,
-  square, tierOf, validateTrade,
+  build, buy, createGame, currentPlayer, endGameByNetWorth, endTurn, executeTrade, fly, money, roll, sail, sellBuilding,
 } from '../engine/game';
-import type { GameState, PlayerSetup, Square, TradeOffer } from '../engine/types';
-import { boardPosition, tileArt, tileIcon } from './tiles';
+import type { GameState, PlayerSetup } from '../engine/types';
+import type { Controller } from './view';
+import { app, detachGame, esc, select, showGame, update } from './view';
+import { HOST_SAVE_KEY, NAME_KEY, store } from './store';
 
 const SAVE_KEY = 'world-monopoly-save-v1';
 const BOT_DELAY_MS = 450;
 
-const app = document.getElementById('app')!;
 let game: GameState | null = null;
-let selected: number | null = null;
 let botTimer: number | undefined;
-let toast = '';
 
-const esc = (v: unknown) =>
-  String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-
-// ---------- persistence ----------
+// ---------- persistence (hot-seat) ----------
 
 function save() {
-  try {
-    if (game) localStorage.setItem(SAVE_KEY, JSON.stringify(game));
-  } catch {
-    /* storage unavailable */
-  }
+  if (game) store.set(SAVE_KEY, JSON.stringify(game));
 }
 
 function loadSave(): GameState | null {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = store.get(SAVE_KEY);
     const s = raw ? (JSON.parse(raw) as GameState) : null;
-    return s && s.version === 1 && s.phase !== 'gameOver' ? s : null;
+    return s && s.version === 4 && s.phase !== 'gameOver' ? s : null;
   } catch {
     return null;
   }
 }
 
 function clearSave() {
-  try {
-    localStorage.removeItem(SAVE_KEY);
-  } catch {
-    /* storage unavailable */
+  store.remove(SAVE_KEY);
+}
+
+// ---------- hot-seat controller ----------
+
+const local: Controller = {
+  game: () => game,
+  room: () => null,
+  canAct: () => !!game && game.phase !== 'gameOver' && !currentPlayer(game).isBot,
+  perform(intent) {
+    const s = game!;
+    switch (intent.type) {
+      case 'roll': return roll(s);
+      case 'buy': return buy(s);
+      case 'build': return build(s, intent.index);
+      case 'sell': return sellBuilding(s, intent.index);
+      case 'fly': return fly(s, intent.dest);
+      case 'sail': return sail(s, intent.dest);
+      case 'endTurn': return endTurn(s);
+      case 'finish': return endGameByNetWorth(s);
+      case 'proposeTrade': {
+        const them = s.players[intent.offer.to];
+        if (them.isBot && !botAcceptsTrade(s, intent.offer)) throw new Error(`${them.name} declined. Bots want about 30% more value than they give.`);
+        return executeTrade(s, intent.offer);
+      }
+      default: return; // respondTrade / cancelTrade only exist online
+    }
+  },
+  convertToBot() {},
+  takeOver() {},
+  leave: () => quit(false),
+  newGame: () => quit(true),
+  afterRender() {
+    save();
+    scheduleBot();
+  },
+};
+
+function quit(clear: boolean) {
+  if (clear) clearSave();
+  window.clearTimeout(botTimer);
+  game = null;
+  detachGame();
+  renderSetup();
+}
+
+function scheduleBot() {
+  window.clearTimeout(botTimer);
+  if (!game || game.phase === 'gameOver' || !currentPlayer(game).isBot) return;
+  if (document.querySelector('.modal-root.open')) return;
+  botTimer = window.setTimeout(() => {
+    if (!game) return;
+    botStep(game);
+    select(currentPlayer(game).position);
+    update();
+  }, BOT_DELAY_MS);
+}
+
+function startWith(s: GameState) {
+  game = s;
+  showGame(local);
+}
+
+// ---------- online entry (the net code is a separate chunk, loaded on demand) ----------
+
+type OnlineModule = typeof import('./online');
+let onlineModule: Promise<OnlineModule> | null = null;
+const loadOnline = () => (onlineModule ??= import('./online').catch((e) => {
+  onlineModule = null;
+  throw e;
+}));
+
+let onlineName = store.get(NAME_KEY) ?? '';
+let joinInput = '';
+let onlineMsg = '';
+let busy = false;
+/** undefined = not checked yet, null = no save, string = room code (display form) of a hosted game that can be resumed. */
+let hostSaveCode: string | null | undefined;
+
+const onlineExit = () => {
+  hostSaveCode = undefined;
+  onlineMsg = '';
+  renderSetup();
+};
+
+async function startOnline(req: Parameters<OnlineModule['enter']>[0]) {
+  const name = onlineName.trim();
+  if (!name && req.kind !== 'resume') {
+    onlineMsg = 'Enter your name first.';
+    return renderSetup();
   }
+  if (name) store.set(NAME_KEY, name);
+  busy = true;
+  onlineMsg = 'Loading online play…';
+  renderSetup();
+  let error: string | null;
+  try {
+    error = await (await loadOnline()).enter(req, { name, exit: onlineExit });
+  } catch {
+    error = 'Could not load online play. Check your connection and try again.';
+  }
+  busy = false;
+  if (error) {
+    onlineMsg = error;
+    renderSetup();
+  }
+}
+
+/** Page opened with an invite link (#room=CODE). */
+function arriveFromLink() {
+  const name = (store.get(NAME_KEY) ?? '').trim();
+  const join = async () => {
+    onlineName = name || onlineName;
+    const error = await loadOnline().then((m) => m.enter({ kind: 'join', input: location.hash }, { name: onlineName, exit: onlineExit })).catch(() => 'Could not load online play. Check your connection and try again.');
+    if (error) {
+      history.replaceState(history.state, '', location.pathname + location.search);
+      onlineMsg = error;
+      renderSetup();
+    }
+  };
+  if (name) return void join();
+  app.innerHTML = `
+    <main class="setup">
+      <h1>World Monopoly</h1>
+      <p>You have been invited to an online game. What should we call you?</p>
+      <input data-prompt-name maxlength="16" aria-label="Your name" autocomplete="nickname" />
+      <p class="toast" data-prompt-msg hidden></p>
+      <div class="row">
+        <button class="ghost" data-act="cancel">Cancel</button>
+        <button class="primary" data-act="go">Join game</button>
+      </div>
+    </main>`;
+  const input = app.querySelector<HTMLInputElement>('[data-prompt-name]')!;
+  input.focus();
+  const go = () => {
+    if (!input.value.trim()) {
+      const msg = app.querySelector<HTMLElement>('[data-prompt-msg]')!;
+      msg.hidden = false;
+      msg.textContent = 'Enter your name first.';
+      return;
+    }
+    onlineName = input.value.trim();
+    store.set(NAME_KEY, onlineName);
+    void join();
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && go());
+  app.querySelector('[data-act="go"]')!.addEventListener('click', go);
+  app.querySelector('[data-act="cancel"]')!.addEventListener('click', () => {
+    history.replaceState(history.state, '', location.pathname + location.search);
+    renderSetup();
+  });
 }
 
 // ---------- setup screen ----------
@@ -62,6 +198,16 @@ let roundLimit = RULES.roundLimit.default;
 function renderSetup() {
   const saved = loadSave();
   const used = (i: number) => new Set(setupRows.filter((_, j) => j !== i).map((r) => r.roleId));
+  // A hosted game left by a reload: only a stored key is checked here; the net chunk validates it.
+  if (hostSaveCode === undefined && store.get(HOST_SAVE_KEY) !== null) {
+    hostSaveCode = null;
+    void loadOnline().then((m) => {
+      hostSaveCode = m.hostSaveRoom();
+      if (hostSaveCode && document.querySelector('.setup')) renderSetup();
+    }).catch(() => {
+      hostSaveCode = undefined;
+    });
+  }
   app.innerHTML = `
     <main class="setup">
       <h1>World Monopoly</h1>
@@ -87,17 +233,32 @@ function renderSetup() {
         ${setupRows.length < RULES.players.max ? '<button data-act="add">+ Add player</button>' : ''}
         <label>Round limit <input type="number" min="0" max="999" value="${roundLimit}" data-limit /></label>
       </div>
-      <p class="muted small">Round limit 0 = play until one player is left (4-bot games run about 230 rounds). At the limit, highest net worth wins.</p>
+      <p class="muted small">Round limit 0 = play until one player is left (4-bot games run about 140 rounds). At the limit, highest net worth wins.</p>
       <button class="primary wide" data-act="start">Start game</button>
+      <section class="online-card" aria-labelledby="online-h">
+        <h2 id="online-h">Play online</h2>
+        <p class="muted small">Each player uses their own device. One player hosts, everyone else joins with a link or room code. No account needed.</p>
+        ${hostSaveCode ? `<button class="primary wide" data-act="resume-host" ${busy ? 'disabled' : ''}>Resume hosted game (room ${esc(hostSaveCode)})</button>` : ''}
+        <label class="field">Your name <input data-online-name value="${esc(onlineName)}" maxlength="16" autocomplete="nickname" /></label>
+        <button class="wide" data-act="host-online" ${busy ? 'disabled' : ''}>Host online game</button>
+        <div class="join-row">
+          <input data-join value="${esc(joinInput)}" placeholder="Room code or invite link" aria-label="Room code or invite link" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+          <button data-act="join" ${busy ? 'disabled' : ''}>Join with code</button>
+        </div>
+        ${onlineMsg ? `<p class="toast" role="status">${esc(onlineMsg)}</p>` : ''}
+      </section>
       <details class="rules">
         <summary>Rules in short</summary>
         <ul>
+          <li>Everyone starts with ${money(RULES.startingCash)} (some roles more or less).</li>
+          <li>Reaching or passing 🎆 New Year pays up to ${money(RULES.lapIncome.amount)} lap income: the full amount for a whole lap walked, less for squares skipped by plane or ship.</li>
           <li>Pass a ⭐ checkpoint (every 12 squares): collect ${money(RULES.salary.perCheckpoint)} salary minus income tax (10/18/25% by net worth).</li>
           <li>Every turn you pay cost of living (${money(RULES.costOfLiving.minimum)} minimum, more for pricier cities). Each New Year you pay ${RULES.propertyTax.percentOfPropertyValue}% property tax.</li>
           <li>No full set needed to build houses. Rent rises 10% for each extra square you own in that section (up to +110%). Hotels need all 8 cities of the section.</li>
           <li>Each section has Water, Gas, Electricity and WiFi meters. Anyone building there pays the meter owners a fee.</li>
-          <li>Airports: pay a landing fee to the owner, or pay a fare to fly to any other airport.</li>
-          <li>Highways are safe. World Event and Disaster squares draw cards. No jail.</li>
+          <li>✈️ Airports: pay a landing fee to the owner, then you may fly to any other airport: short-, medium- or long-haul fare (${RULES.airports.flightBands.map((b) => money(b.fare)).join(' / ')}).</li>
+          <li>⚓ Seaports: pay a docking fee to the owner, then you may sail one sea route to the port at its other end for ${money(RULES.seaports.sailFare)}.</li>
+          <li>World Event and Disaster squares draw cards. No jail.</li>
         </ul>
       </details>
     </main>`;
@@ -129,404 +290,26 @@ function renderSetup() {
     const setups: PlayerSetup[] = setupRows.map((r, i) => ({ ...r, name: r.name.trim() || `Player ${i + 1}` }));
     startWith(createGame(setups, Date.now(), roundLimit));
   });
-}
 
-function startWith(s: GameState) {
-  game = s;
-  selected = currentPlayer(s).position;
-  mountGame();
-  update();
-}
-
-// ---------- game screen ----------
-
-function mountGame() {
-  app.innerHTML = `
-    <div class="game">
-      <section class="board-wrap" aria-label="Board">
-        <div class="zoom">
-          <button data-zoom="-1" aria-label="Zoom out">−</button>
-          <button data-zoom="1" aria-label="Zoom in">+</button>
-          <button data-fit aria-label="Fit whole board">⤢</button>
-          <button data-follow aria-label="Jump to current player">◎</button>
-        </div>
-        <div class="board-scroll"><div class="board" id="board"></div></div>
-      </section>
-      <aside class="panel" id="panel"></aside>
-    </div>
-    <div class="modal-root" id="modal"></div>`;
-
-  const board = document.getElementById('board')!;
-  board.innerHTML =
-    BOARD.map((sq) => {
-      const { row, col } = boardPosition(sq.index, BOARD.length);
-      const section = sq.section ? sectionById.get(sq.section)! : null;
-      return `
-        <button class="tile tile-${sq.type}" data-tile="${sq.index}" style="grid-row:${row + 1};grid-column:${col + 1};${section ? `--section:${section.color}` : ''}" title="${esc(sq.name)}">
-          ${section ? '<span class="band"></span>' : ''}
-          <span class="art">${tileArt(sq)}</span>
-          <span class="label">${esc(shortName(sq))}</span>
-          ${sq.price ? `<span class="price">${money(sq.price)}</span>` : ''}
-          ${sq.checkpoint ? '<span class="checkpoint" title="Salary checkpoint">⭐</span>' : ''}
-          <span class="levels"></span>
-          <span class="tokens"></span>
-        </button>`;
-    }).join('') +
-    `<div class="board-center">
-      <h2>World Monopoly</h2>
-      <div class="legend">${[...sectionById.values()].map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>
-      <p class="muted small">Tap any square for details.</p>
-    </div>`;
-
-  board.addEventListener('click', (e) => {
-    const tile = (e.target as HTMLElement).closest<HTMLElement>('[data-tile]');
-    if (!tile) return;
-    selected = Number(tile.dataset.tile);
-    update(false);
-  });
-
-  let cell = Number(localStorageGet('world-monopoly-cell') ?? 56);
-  const applyZoom = () => {
-    document.documentElement.style.setProperty('--cell', `${cell}px`);
-    board.classList.toggle('compact', cell < 44);
-    localStorageSet('world-monopoly-cell', String(cell));
+  const nameInput = app.querySelector<HTMLInputElement>('[data-online-name]')!;
+  const joinField = app.querySelector<HTMLInputElement>('[data-join]')!;
+  nameInput.addEventListener('input', () => (onlineName = nameInput.value));
+  joinField.addEventListener('input', () => (joinInput = joinField.value));
+  const join = () => {
+    if (!joinInput.trim()) {
+      onlineMsg = 'Paste a room code or an invite link.';
+      return renderSetup();
+    }
+    void startOnline({ kind: 'join', input: joinInput });
   };
-  applyZoom();
-  app.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach((b) =>
-    b.addEventListener('click', () => {
-      cell = Math.min(110, Math.max(16, cell + Number(b.dataset.zoom) * 12));
-      applyZoom();
-      follow();
-    }));
-  app.querySelector('[data-fit]')!.addEventListener('click', () => {
-    const scroller = document.querySelector<HTMLElement>('.board-scroll')!;
-    const n = boardPosition(0, BOARD.length).row + 1;
-    // 2px grid gap, 32px horizontal and 72px vertical padding (see .board in styles.css)
-    cell = Math.max(16, Math.floor(Math.min((scroller.clientWidth - 32) / n, (scroller.clientHeight - 72) / n) - 2));
-    applyZoom();
-  });
-  app.querySelector('[data-follow]')!.addEventListener('click', follow);
+  joinField.addEventListener('keydown', (e) => e.key === 'Enter' && join());
+  app.querySelector('[data-act="join"]')!.addEventListener('click', join);
+  app.querySelector('[data-act="host-online"]')!.addEventListener('click', () => void startOnline({ kind: 'host' }));
+  app.querySelector('[data-act="resume-host"]')?.addEventListener('click', () => void startOnline({ kind: 'resume' }));
 }
 
-function localStorageGet(k: string) {
-  try {
-    return localStorage.getItem(k);
-  } catch {
-    return null;
-  }
-}
-function localStorageSet(k: string, v: string) {
-  try {
-    localStorage.setItem(k, v);
-  } catch {
-    /* storage unavailable */
-  }
-}
+// Dev server only (dropped from builds): lets a browser script inspect and stage the hot-seat game, e.g. put a token on an airport.
+if (import.meta.env.DEV) Object.assign(window, { __wm: { game: () => game, redraw: () => update() } });
 
-function shortName(sq: Square) {
-  if (sq.type === 'utility') return RULES.utilities.kinds.find((k) => k.id === sq.utility)!.name;
-  return sq.name;
-}
-
-function follow() {
-  if (!game) return;
-  const scroller = document.querySelector<HTMLElement>('.board-scroll');
-  const tile = document.querySelector<HTMLElement>(`[data-tile="${currentPlayer(game).position}"]`);
-  if (!scroller || !tile) return;
-  // Scroll only the board, never the page or the panel.
-  scroller.scrollTo({
-    left: tile.offsetLeft - scroller.clientWidth / 2 + tile.offsetWidth / 2,
-    top: tile.offsetTop - scroller.clientHeight / 2 + tile.offsetHeight / 2,
-    behavior: 'smooth',
-  });
-}
-
-function update(scroll = true) {
-  if (!game) return;
-  const s = game;
-  save();
-  renderBoardState(s);
-  renderPanel(s);
-  if (scroll) follow();
-  scheduleBot();
-}
-
-function renderBoardState(s: GameState) {
-  document.querySelectorAll<HTMLElement>('[data-tile]').forEach((tile) => {
-    const i = Number(tile.dataset.tile);
-    const owner = ownerOf(s, i);
-    tile.style.setProperty('--owner', owner ? owner.color : 'transparent');
-    tile.classList.toggle('owned', !!owner);
-    tile.classList.toggle('selected', i === selected);
-    tile.classList.toggle('current', i === currentPlayer(s).position);
-    const level = levelOf(s, i);
-    tile.querySelector('.levels')!.innerHTML = level === HOTEL ? '<b class="hotel">H</b>' : '<b class="house"></b>'.repeat(level);
-    tile.querySelector('.tokens')!.innerHTML = s.players
-      .filter((p) => !p.bankrupt && p.position === i)
-      .map((p) => `<i class="token" style="background:${p.color}" title="${esc(p.name)}"></i>`)
-      .join('');
-  });
-}
-
-function renderPanel(s: GameState) {
-  const panel = document.getElementById('panel')!;
-  const p = currentPlayer(s);
-  const human = !p.isBot && s.phase !== 'gameOver';
-  const here = square(p.position);
-  const pending = s.pendingBuy !== null ? square(s.pendingBuy) : null;
-
-  let actions = '';
-  if (s.phase === 'gameOver') {
-    const w = s.players[s.winner!];
-    actions = `<div class="winner">🏆 ${esc(w.name)} wins with ${money(netWorth(s, w))} net worth.</div>
-      <button class="primary wide" data-act="new">New game</button>`;
-  } else if (!human) {
-    actions = `<p class="muted">${esc(p.name)} is thinking…</p>`;
-  } else if (s.phase === 'roll') {
-    actions = `<button class="primary wide" data-act="roll">🎲 Roll dice</button>`;
-  } else {
-    actions = `
-      ${pending ? `<button class="primary wide" data-act="buy" ${p.cash < pending.price! ? 'disabled' : ''}>Buy ${esc(pending.name)} for ${money(pending.price!)}</button>` : ''}
-      ${s.canFly && here.type === 'airport' ? `
-        <div class="fly">
-          <select data-fly aria-label="Destination airport">
-            ${AIRPORTS.filter((a) => a !== p.position).map((a) => `<option value="${a}">${esc(square(a).name)} · ${nearbySection(a)} · ${money(flightFare(s, a))}</option>`).join('')}
-          </select>
-          <button data-act="fly">✈️ Fly</button>
-        </div>` : ''}
-      <div class="row">
-        <button data-act="trade">🤝 Trade</button>
-        <button class="primary" data-act="end">End turn</button>
-      </div>`;
-  }
-
-  panel.innerHTML = `
-    <header class="turn" style="--who:${p.color}">
-      <div><strong>${esc(p.name)}</strong> <span class="muted">· ${esc(roleOf(p).name)}</span></div>
-      <div class="muted small">Round ${s.turn}${s.roundLimit ? ` / ${s.roundLimit}` : ''}</div>
-    </header>
-    ${s.dice ? `<div class="dice">${s.dice.map((d) => `<span>${d}</span>`).join('')}</div>` : ''}
-    ${s.lastEvent ? `<div class="event event-${s.lastEvent.kind}"><strong>${esc(s.lastEvent.title)}</strong><p>${esc(s.lastEvent.text)}</p></div>` : ''}
-    ${toast ? `<div class="toast">${esc(toast)}</div>` : ''}
-    <div class="actions">${actions}</div>
-    ${selected !== null ? detail(s, selected, human) : ''}
-    <h3>Players</h3>
-    <ul class="players">
-      ${s.players.map((pl) => `
-        <li class="${pl.bankrupt ? 'out' : ''} ${pl.id === p.id ? 'active' : ''}">
-          <i class="token" style="background:${pl.color}"></i>
-          <div>
-            <strong>${esc(pl.name)}</strong> <span class="muted small">${esc(roleOf(pl).name)}${pl.isBot ? ' · bot' : ''}</span>
-            <div class="small">${pl.bankrupt ? 'Bankrupt' : `Cash ${money(pl.cash)} · Worth ${money(netWorth(s, pl))} · ${ownedBy(s, pl.id).length} props`}
-              ${pl.skipNextTurn ? ' · misses next turn' : ''}${pl.skipAirportIncome ? ' · flight delayed' : ''}</div>
-            ${!pl.bankrupt ? `<div class="small muted">${roleOf(pl).noSalary ? 'No salary' : `Income tax ${Math.round(incomeTaxRate(s, pl) * 100)}%`} · Living ${money(costOfLiving(s, pl))}/turn · Lap ${pl.laps}</div>` : ''}
-          </div>
-        </li>`).join('')}
-    </ul>
-    <h3>Log</h3>
-    <ul class="log">${s.log.slice(-40).reverse().map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
-    <div class="row footer-actions">
-      ${s.phase !== 'gameOver' ? '<button class="ghost" data-act="finish">End game now</button>' : ''}
-      <button class="ghost" data-act="quit">Main menu</button>
-    </div>`;
-
-  toast = '';
-  const on = (act: string, fn: () => void) => panel.querySelector(`[data-act="${act}"]`)?.addEventListener('click', () => guard(fn));
-  on('roll', () => {
-    roll(s);
-    selected = currentPlayer(s).id === p.id ? p.position : selected;
-  });
-  on('buy', () => buy(s));
-  on('end', () => {
-    endTurn(s);
-    selected = currentPlayer(s).position;
-  });
-  on('fly', () => {
-    const dest = Number(panel.querySelector<HTMLSelectElement>('[data-fly]')!.value);
-    fly(s, dest);
-    selected = dest;
-  });
-  on('trade', () => openTrade(s));
-  on('finish', () => endGameByNetWorth(s));
-  on('new', () => quit());
-  on('quit', () => quit(false));
-  panel.querySelectorAll<HTMLButtonElement>('[data-build]').forEach((b) => b.addEventListener('click', () => guard(() => build(s, Number(b.dataset.build)))));
-  panel.querySelectorAll<HTMLButtonElement>('[data-sell]').forEach((b) => b.addEventListener('click', () => guard(() => sellBuilding(s, Number(b.dataset.sell)))));
-}
-
-function nearbySection(airport: number) {
-  for (let i = airport; i >= 0; i--) if (BOARD[i].section) return sectionById.get(BOARD[i].section!)!.name;
-  return '';
-}
-
-function detail(s: GameState, index: number, human: boolean) {
-  const sq = square(index);
-  const section = sq.section ? sectionById.get(sq.section)! : null;
-  const owner = ownerOf(s, index);
-  const p = currentPlayer(s);
-  const city = section?.cities.find((c) => c.id === sq.id);
-  let body = '';
-  if (sq.type === 'city') {
-    const level = levelOf(s, index);
-    const check = canBuild(s, index);
-    const mine = human && s.phase === 'action' && owner?.id === p.id;
-    const rentNow = cityRent(s, index);
-    body = `
-      <p class="small">${city ? esc(city.landmark) : ''}${sq.image ? '' : ' · <em>art pending</em>'}</p>
-      <p>Price ${money(sq.price!)} · ${tierOf(sq.price!).id} tier · House ${money(tierOf(sq.price!).houseCost)}</p>
-      <p>Owner: ${owner ? esc(owner.name) : 'Bank'} · ${level === HOTEL ? 'Hotel' : `${level} house${level === 1 ? '' : 's'}`}</p>
-      <p>Rent now: <strong>${money(rentNow)}</strong></p>
-      ${mine ? `<div class="row">
-        <button data-build="${index}" ${check.ok ? '' : 'disabled'}>${level + 1 === HOTEL ? 'Build hotel' : 'Build house'}${check.ok ? ` ${money(check.cost + check.fees.reduce((a, f) => a + f.amount, 0))}` : ''}</button>
-        <button data-sell="${index}" ${level ? '' : 'disabled'}>Sell building</button>
-      </div>${check.ok ? '' : `<p class="small muted">${esc(check.reason)}</p>`}` : ''}`;
-  } else if (sq.type === 'utility') {
-    body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
-      <p class="small">Earns ${money(RULES.utilities.feePerHouse)} per house and ${money(RULES.utilities.feePerHotel)} per hotel anyone else builds in ${esc(section!.name)}.${RULES.utilities.requiresCityInSection ? ' Only active while the owner has a city in this section.' : ''}</p>`;
-  } else if (sq.type === 'airport') {
-    body = `<p>Price ${money(sq.price!)} · Owner: ${owner ? esc(owner.name) : 'Bank'}</p>
-      <p class="small">Landing fee ${money(RULES.airports.landingFee)}, flight fare ${money(RULES.airports.flightFare)}, +${RULES.airports.bonusPerExtraAirport * 100}% per extra airport the owner has.</p>`;
-  } else {
-    const text: Record<string, string> = {
-      newYear: `Salary checkpoint and lap marker. Each lap: pay ${RULES.propertyTax.percentOfPropertyValue}% property tax; Bankers earn interest.`,
-      event: 'Draw a World Event card.',
-      disaster: section ? `Regional disaster: ${section.disasters.join(' or ')}. Damages buildings in ${section.name}.` : '',
-      highway: 'Safe zone. Nothing happens.',
-      tax: `Pay ${money(RULES.taxSquare.amount)}.`,
-    };
-    body = `<p class="small">${esc(text[sq.type] ?? '')}</p>`;
-  }
-  return `
-    <div class="detail" style="${section ? `--section:${section.color}` : ''}">
-      <div class="detail-art">${tileArt(sq)}</div>
-      <div>
-        <h3>${tileIcon(sq)} ${esc(sq.name)}</h3>
-        ${section ? `<div class="small muted">${esc(section.name)} · square ${index}</div>` : `<div class="small muted">Square ${index}</div>`}
-        ${body}
-      </div>
-    </div>`;
-}
-
-function guard(fn: () => void) {
-  try {
-    fn();
-  } catch (e) {
-    toast = (e as Error).message;
-  }
-  update();
-}
-
-function quit(clear = true) {
-  if (clear) clearSave();
-  window.clearTimeout(botTimer);
-  game = null;
-  renderSetup();
-}
-
-function scheduleBot() {
-  window.clearTimeout(botTimer);
-  if (!game || game.phase === 'gameOver' || !currentPlayer(game).isBot) return;
-  if (document.querySelector('.modal-root.open')) return;
-  botTimer = window.setTimeout(() => {
-    if (!game) return;
-    botStep(game);
-    selected = currentPlayer(game).position;
-    update();
-  }, BOT_DELAY_MS);
-}
-
-// ---------- trading ----------
-
-function openTrade(s: GameState) {
-  const me = currentPlayer(s);
-  const others = activePlayers(s).filter((o) => o.id !== me.id);
-  let partner = others[0].id;
-  const modal = document.getElementById('modal')!;
-
-  const propList = (playerId: number, name: string) =>
-    ownedBy(s, playerId)
-      .sort((a, b) => a - b)
-      .map((i) => `<label class="check"><input type="checkbox" name="${name}" value="${i}" />${tileIcon(square(i))} ${esc(square(i).name)} <span class="muted">${money(square(i).price!)}${levelOf(s, i) ? ` · L${levelOf(s, i)}` : ''}</span></label>`)
-      .join('') || '<p class="muted small">No properties</p>';
-
-  const draw = (message = '') => {
-    const them = s.players[partner];
-    modal.className = 'modal-root open';
-    modal.innerHTML = `
-      <div class="modal" role="dialog" aria-label="Trade">
-        <h3>Trade</h3>
-        <label>With <select data-partner>${others.map((o) => `<option value="${o.id}" ${o.id === partner ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
-        <div class="trade-cols">
-          <div><h4>You give</h4>${propList(me.id, 'give')}</div>
-          <div><h4>${esc(them.name)} gives</h4>${propList(them.id, 'get')}</div>
-        </div>
-        <label>Cash <input type="number" step="10" value="0" data-cash /> <span class="small muted">positive = you pay, negative = they pay</span></label>
-        ${message ? `<p class="toast">${esc(message)}</p>` : ''}
-        <div class="row">
-          <button class="ghost" data-close>Cancel</button>
-          <button class="primary" data-propose>Propose</button>
-        </div>
-      </div>`;
-    modal.querySelector('[data-partner]')!.addEventListener('change', (e) => {
-      partner = Number((e.target as HTMLSelectElement).value);
-      draw();
-    });
-    modal.querySelector('[data-close]')!.addEventListener('click', closeModal);
-    modal.querySelector('[data-propose]')!.addEventListener('click', () => {
-      const picked = (name: string) => [...modal.querySelectorAll<HTMLInputElement>(`input[name="${name}"]:checked`)].map((x) => Number(x.value));
-      const offer: TradeOffer = { from: me.id, to: partner, give: picked('give'), get: picked('get'), cash: Math.round(Number(modal.querySelector<HTMLInputElement>('[data-cash]')!.value) || 0) };
-      const err = validateTrade(s, offer);
-      if (err) return draw(err);
-      if (them.isBot) {
-        if (botAcceptsTrade(s, offer)) {
-          executeTrade(s, offer);
-          toast = `${them.name} accepted.`;
-          closeModal();
-        } else {
-          draw(`${them.name} declined. Bots want about 30% more value than they give.`);
-        }
-      } else {
-        confirmTrade(offer);
-      }
-    });
-  };
-
-  const confirmTrade = (offer: TradeOffer) => {
-    const them = s.players[offer.to];
-    const names = (xs: number[]) => (xs.length ? xs.map((i) => esc(square(i).name)).join(', ') : 'nothing');
-    modal.innerHTML = `
-      <div class="modal" role="dialog" aria-label="Accept trade">
-        <h3>Pass the device to ${esc(them.name)}</h3>
-        <p>${esc(me.name)} offers <strong>${names(offer.give)}</strong>${offer.cash > 0 ? ` + ${money(offer.cash)}` : ''}
-          for <strong>${names(offer.get)}</strong>${offer.cash < 0 ? ` + ${money(-offer.cash)}` : ''}.</p>
-        <div class="row">
-          <button class="ghost" data-decline>Decline</button>
-          <button class="primary" data-accept>Accept</button>
-        </div>
-      </div>`;
-    modal.querySelector('[data-decline]')!.addEventListener('click', () => {
-      toast = `${them.name} declined.`;
-      closeModal();
-    });
-    modal.querySelector('[data-accept]')!.addEventListener('click', () => {
-      try {
-        executeTrade(s, offer);
-        toast = `${them.name} accepted.`;
-      } catch (e) {
-        toast = (e as Error).message;
-      }
-      closeModal();
-    });
-  };
-
-  draw();
-}
-
-function closeModal() {
-  const modal = document.getElementById('modal')!;
-  modal.className = 'modal-root';
-  modal.innerHTML = '';
-  update(false);
-}
-
-renderSetup();
+if (/(^|[#&])room=/.test(location.hash)) arriveFromLink();
+else renderSetup();
