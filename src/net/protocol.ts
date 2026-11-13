@@ -193,7 +193,7 @@ const isRecordOf = (v: unknown, valueOk: (x: unknown) => boolean) =>
 
 /** Structural check of a GameState, so a hostile "host" cannot crash a guest's renderer. */
 export function validGameState(v: unknown, playerCount: number): v is GameState {
-  if (!isObj(v) || v.version !== 1) return false;
+  if (!isObj(v) || v.version !== 2) return false;
   const players = v.players;
   if (!Array.isArray(players) || players.length !== playerCount) return false;
   const playersOk = players.every((p, i) =>

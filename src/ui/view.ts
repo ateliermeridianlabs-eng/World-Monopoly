@@ -9,7 +9,7 @@ import {
 } from '../engine/game';
 import type { GameState, TradeOffer } from '../engine/types';
 import type { Intent, PendingTrade, Seat, SessionStatus } from '../net';
-import { boardPosition, tileArt, tileIcon } from './tiles';
+import { MAP, boardPosition, mapBackdropSvg, routeArrowsSvg, tileArt, tileIcon } from './tiles';
 import { store } from './store';
 
 export const app = document.getElementById('app')!;
@@ -195,12 +195,14 @@ function mountGame() {
     <div class="modal-root" id="modal"></div>`;
 
   const board = document.getElementById('board')!;
+  const t = MAP.title;
   board.innerHTML =
+    `<div class="map" style="--map-w:${MAP.width};--map-h:${MAP.height}">${mapBackdropSvg()}` +
     BOARD.map((sq) => {
-      const { row, col } = boardPosition(sq.index, BOARD.length);
+      const { x, y } = boardPosition(sq.index);
       const section = sq.section ? sectionById.get(sq.section)! : null;
       return `
-        <button class="tile tile-${sq.type}" data-tile="${sq.index}" style="grid-row:${row + 1};grid-column:${col + 1};${section ? `--section:${section.color}` : ''}" title="${esc(sq.name)}">
+        <button class="tile tile-${sq.type}" data-tile="${sq.index}" style="--x:${x};--y:${y};${section ? `--section:${section.color}` : ''}" title="${esc(sq.name)}">
           ${section ? '<span class="band"></span>' : ''}
           <span class="art">${tileArt(sq)}</span>
           <span class="label">${esc(shortName(sq))}</span>
@@ -210,11 +212,11 @@ function mountGame() {
           <span class="tokens"></span>
         </button>`;
     }).join('') +
-    `<div class="board-center">
+    `<div class="board-center" style="--tx:${t.x};--ty:${t.y};--tw:${t.w};--th:${t.h}">
       <h2>World Monopoly</h2>
       <div class="legend">${[...sectionById.values()].map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>
-      <p class="muted small">Tap any square for details.</p>
-    </div>`;
+      <p class="muted">Tap any square for details.</p>
+    </div>${routeArrowsSvg()}</div>`;
 
   board.addEventListener('click', (e) => {
     const tile = (e.target as HTMLElement).closest<HTMLElement>('[data-tile]');
@@ -238,9 +240,8 @@ function mountGame() {
     }));
   app.querySelector('[data-fit]')!.addEventListener('click', () => {
     const scroller = document.querySelector<HTMLElement>('.board-scroll')!;
-    const n = boardPosition(0, BOARD.length).row + 1;
-    // 2px grid gap, 32px horizontal and 72px vertical padding (see .board in styles.css)
-    cell = Math.max(16, Math.floor(Math.min((scroller.clientWidth - 32) / n, (scroller.clientHeight - 72) / n) - 2));
+    // 32px horizontal and 72px vertical padding around the map (see .board in styles.css)
+    cell = Math.max(16, Math.floor(Math.min((scroller.clientWidth - 32) / MAP.width, (scroller.clientHeight - 72) / MAP.height)));
     applyZoom();
   });
   app.querySelector('[data-follow]')!.addEventListener('click', follow);
@@ -258,9 +259,10 @@ function follow() {
   const tile = document.querySelector<HTMLElement>(`[data-tile="${currentPlayer(s).position}"]`);
   if (!scroller || !tile) return;
   // Scroll only the board, never the page or the panel.
+  const box = scroller.getBoundingClientRect(), r = tile.getBoundingClientRect();
   scroller.scrollTo({
-    left: tile.offsetLeft - scroller.clientWidth / 2 + tile.offsetWidth / 2,
-    top: tile.offsetTop - scroller.clientHeight / 2 + tile.offsetHeight / 2,
+    left: scroller.scrollLeft + r.left - box.left - scroller.clientWidth / 2 + r.width / 2,
+    top: scroller.scrollTop + r.top - box.top - scroller.clientHeight / 2 + r.height / 2,
     behavior: 'smooth',
   });
 }

@@ -98,7 +98,8 @@ export interface LastEvent {
 }
 
 export interface GameState {
-  version: 1;
+  /** Bumped when saved games become incompatible (2: board reordered into a trip around the world). Older saves are ignored. */
+  version: 2;
   players: Player[];
   /** square index -> player id */
   owners: Record<number, number>;

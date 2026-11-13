@@ -43,7 +43,7 @@ export function createGame(setups: PlayerSetup[], seed = Date.now(), roundLimit 
     };
   });
   const state: GameState = {
-    version: 1,
+    version: 2,
     players,
     owners: {},
     levels: {},
